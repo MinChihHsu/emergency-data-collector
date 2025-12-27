@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Emergency Data Collector</string>
+    <string name="emergency_button">Start</string>
+    <string name="permission_required">Permission Required</string>
+    <string name="time_recorded">Time Recorded</string>
+    <string name="data_saved">Data Saved</string>
+    
+    <!-- emergency number -->
+    <string name="emergency_number">911</string>
+    
+    <!-- WiFi Calling hint -->
+    <string name="wifi_calling_number_hint">Enter WiFi calling number for scenario #3</string>
+    
+    <!-- default experiments count -->
+    <string name="default_experiments_count">10</string>
+
+    <!-- Timing Configuration (ms) -->
+    <string name="delay_frida_ready">3000</string>
+    <string name="delay_call_duration">8000</string>
+    <string name="delay_after_hangup">2000</string>
+    <string name="delay_between_calls">5000</string>
+
+    <!-- Accessibility Service -->
+    <string name="accessibility_description">This service automates signaling log collection during measurements.</string>
+</resources>

@@ -1,0 +1,935 @@
+package com.emergency.datacollector
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.telecom.TelecomManager
+import android.telephony.CellInfo
+import android.telephony.CellInfoLte
+import android.telephony.CellInfoNr
+import android.telephony.CellInfoWcdma
+import android.telephony.CellInfoGsm
+import android.telephony.TelephonyManager
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.*
+import kotlin.concurrent.thread
+import kotlin.math.abs
+
+class MainActivity : AppCompatActivity() {
+
+    // UI Components
+    private lateinit var infoTextView: TextView // default log
+    private lateinit var txtLocation: TextView // log from gps
+    private lateinit var txtCountryCode: TextView // telephonyManager.networkCountryIso
+    private lateinit var txtMccMnc: TextView // telephonyManager.networkOperator
+    private lateinit var btnRefreshGps: Button // refresh gps
+    private lateinit var txtEmergencyNumber: TextView
+    private lateinit var editWifiCallingNumber: EditText
+    private lateinit var spinnerExperimentsCount: Spinner
+    private lateinit var checkScenario1: CheckBox
+    private lateinit var checkScenario2: CheckBox
+    private lateinit var checkScenario3: CheckBox
+    private lateinit var checkScenario4: CheckBox
+    private lateinit var btnStartExperiment: Button
+    private lateinit var btnStopExperiment: Button
+    
+    // Configuration
+    private var dialNumber: String = ""
+    private var emergencyNumber: String = "911"
+    private var wifiCallingNumber: String = ""
+    private var experimentsPerScenario: Int = 10
+    private var gpsLocation: String = ""  // Format: {n/s}xx.xxxxxx_{e/w}xx.xxxxxx
+    private var countryCode: String = "--"  // 2-letter ISO code
+    private var mccMnc: String = "000000"  // MCC+MNC
+    private var operatorName: String = "Unknown"  // Carrier name from PLMN lookup // TODO: use database
+    private var modelName: String = Build.MODEL  // e.g. SM-G9910
+    private var deviceId: String = ""  // Device ID
+    
+    // Scenario selection
+    private var runScenario1 = true
+    private var runScenario2 = true
+    private var runScenario3 = true
+    private var runScenario4 = true
+    
+    // Current phase: 1 = Home Carrier, 2 = Visitor Carrier
+    private var currentPhase = 1
+    private var currentMeasurementCount = 0
+    private var totalMeasurementsPerPhase = 10
+    private var isCollectionRunning = false
+    private var shouldStop = false
+    
+    private val handler = Handler(Looper.getMainLooper())
+    
+    // Timing (loaded from strings.xml in onCreate)
+    private var delayFridaReady = 3000L
+    private var delayCallDuration = 8000L
+    private var delayAfterHangup = 2000L
+    private var delayBetweenCalls = 5000L
+    
+    // End call button coordinates (for emergency calls, samsung S21)
+    private var endCallButtonX = 585
+    private var endCallButtonY = 2012
+    
+    private lateinit var prefs: SharedPreferences
+
+    private val PERMISSION_REQUEST_CODE = 100
+    private val requiredPermissions = arrayOf(
+        Manifest.permission.CALL_PHONE,
+        Manifest.permission.ACCESS_WIFI_STATE,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.ANSWER_PHONE_CALLS
+    )
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        
+        prefs = getSharedPreferences("AppConfig", MODE_PRIVATE)
+
+        // Bind UI Components
+        infoTextView = findViewById(R.id.infoTextView)
+        txtLocation = findViewById(R.id.txtLocation)
+        txtCountryCode = findViewById(R.id.txtCountryCode)
+        txtMccMnc = findViewById(R.id.txtMccMnc)
+        btnRefreshGps = findViewById(R.id.btnRefreshGps)
+        txtEmergencyNumber = findViewById(R.id.txtEmergencyNumber)
+        editWifiCallingNumber = findViewById(R.id.editWifiCallingNumber)
+        spinnerExperimentsCount = findViewById(R.id.spinnerExperimentsCount)
+        checkScenario1 = findViewById(R.id.checkScenario1)
+        checkScenario2 = findViewById(R.id.checkScenario2)
+        checkScenario3 = findViewById(R.id.checkScenario3)
+        checkScenario4 = findViewById(R.id.checkScenario4)
+        btnStartExperiment = findViewById(R.id.btnStartExperiment)
+        btnStopExperiment = findViewById(R.id.btnStopExperiment)
+
+        
+        // Setup experiments spinner (1-10)
+        val experimentOptions = (1..10).toList()
+        val spinnerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, experimentOptions)
+        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerExperimentsCount.adapter = spinnerAdapter
+        spinnerExperimentsCount.setSelection(9)  // Default to 10 (index 9)
+        
+        // Load emergency number from strings.xml
+        emergencyNumber = getString(R.string.emergency_number)
+        dialNumber = emergencyNumber
+        
+        // Load timing configuration from strings.xml
+        delayFridaReady = getString(R.string.delay_frida_ready).toLong()
+        delayCallDuration = getString(R.string.delay_call_duration).toLong()
+        delayAfterHangup = getString(R.string.delay_after_hangup).toLong()
+        delayBetweenCalls = getString(R.string.delay_between_calls).toLong()
+        
+        // Get device serial number
+        // TODO: serial number?
+        deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+        
+        updateMccMnc()
+        
+        // GPS refresh button
+        btnRefreshGps.setOnClickListener {
+            refreshGpsLocation()
+        }
+        
+        btnStartExperiment.setOnClickListener {
+            if (checkPermissions()) {
+                // Update config from UI
+                experimentsPerScenario = spinnerExperimentsCount.selectedItem as Int
+                totalMeasurementsPerPhase = experimentsPerScenario
+                wifiCallingNumber = editWifiCallingNumber.text.toString()
+                runScenario1 = checkScenario1.isChecked
+                runScenario2 = checkScenario2.isChecked
+                runScenario3 = checkScenario3.isChecked
+                runScenario4 = checkScenario4.isChecked
+                
+                startFullCollection()
+            } else {
+                requestPermissions()
+            }
+        }
+        
+        btnStopExperiment.setOnClickListener {
+            stopCollection()
+        }
+
+        if (!checkPermissions()) {
+            requestPermissions()
+        } else {
+            // get gps automatically
+            refreshGpsLocation()
+        }
+        
+        infoTextView.text = "Ready. Configure settings and press Start.\n"
+        
+        // Ensure SIM is enabled when app starts
+        ensureSimEnabled()
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // Ensure SIM is enabled when app resumes
+        ensureSimEnabled()
+    }
+    
+    private fun ensureSimEnabled() {
+        try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            if (tm.simState != TelephonyManager.SIM_STATE_READY) {
+                appendLog("SIM not ready, enabling...")
+                enableSim()
+            }
+        } catch (e: Exception) {
+            appendLog("SIM check error: ${e.message}")
+        }
+    }
+
+    // ===== GPS Location =====
+
+    private fun refreshGpsLocation() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) 
+            != PackageManager.PERMISSION_GRANTED) {
+            txtLocation.text = "No GPS permission"
+            return
+        }
+        
+        txtLocation.text = "Getting GPS..."
+        
+        try {
+            val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            
+            // get last known location
+            val lastKnown = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            
+            if (lastKnown != null) {
+                updateLocationDisplay(lastKnown)
+            }
+            
+            // gps update
+            val locationListener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    updateLocationDisplay(location)
+                    locationManager.removeUpdates(this)
+                }
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+                @Deprecated("Deprecated in Java")
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+            }
+            
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER, 0, 0f, locationListener
+                )
+            } else if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.NETWORK_PROVIDER, 0, 0f, locationListener
+                )
+            }
+            
+            // stop request after 5s
+            handler.postDelayed({
+                locationManager.removeUpdates(locationListener)
+            }, 5000)
+            
+        } catch (e: Exception) {
+            txtLocation.text = "GPS Error: ${e.message}"
+        }
+    }
+    
+    private fun updateLocationDisplay(location: Location) {
+        // format: {n/s}xx.xxxxxx_{e/w}xx.xxxxxx
+        val latDir = if (location.latitude >= 0) "n" else "s"
+        val lonDir = if (location.longitude >= 0) "e" else "w"
+        val lat = abs(location.latitude)
+        val lon = abs(location.longitude)
+        
+        gpsLocation = "${latDir}${String.format("%.6f", lat)}_${lonDir}${String.format("%.6f", lon)}"
+        txtLocation.text = gpsLocation
+    }
+    
+    // ===== MCC/MNC and Country Code =====
+
+    private fun updateMccMnc() {
+        try {
+            val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            
+            // MCC+MNC
+            val networkOperator = telephonyManager.networkOperator
+            if (networkOperator.isNotEmpty() && networkOperator.length >= 5) {
+                mccMnc = networkOperator
+            } else {
+                mccMnc = "000000"
+            }
+            txtMccMnc.text = mccMnc
+            
+            // Get operator name from TelephonyManager
+            val netOpName = telephonyManager.networkOperatorName
+            operatorName = if (netOpName.isNotEmpty()) netOpName else "Unknown"
+            
+            // get country code (2-letter ISO)
+            val networkCountry = telephonyManager.networkCountryIso
+            if (networkCountry.isNotEmpty()) {
+                countryCode = networkCountry.uppercase()
+            } else {
+                countryCode = "--"
+            }
+            txtCountryCode.text = countryCode
+            
+        } catch (e: Exception) {
+            mccMnc = "000000"
+            countryCode = "--"
+            txtMccMnc.text = mccMnc
+            txtCountryCode.text = countryCode
+        }
+    }
+    
+    // ===== Main Collection Flow =====
+    
+    private fun startFullCollection() {
+        if (isCollectionRunning) {
+            Toast.makeText(this, "Collection already running", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        isCollectionRunning = true
+        shouldStop = false
+        currentMeasurementCount = 0
+
+        btnStartExperiment.isEnabled = false
+        btnStopExperiment.isEnabled = true
+        setInputsEnabled(false)
+        
+        appendLog("=== Starting Full Collection ===")
+        appendLog("Selected scenarios: " + 
+            listOfNotNull(
+                if (runScenario1) "1" else null,
+                if (runScenario2) "2" else null,
+                if (runScenario3) "3" else null,
+                if (runScenario4) "4" else null
+            ).joinToString(", "))
+        appendLog("Measurements per scenario: $totalMeasurementsPerPhase")
+        
+        // get first scenario to experiment
+        val firstPhase = getFirstEnabledPhase()
+        if (firstPhase == null) {
+            finishCollection("No scenarios selected!")
+            return
+        }
+
+        // no need of CellularPro now, so skip here
+        // updateProgress("Launching Cellular Pro...")
+        // launchCellularPro()
+        
+        handler.postDelayed({
+            if (shouldStop) {
+                finishCollection("Stopped by user")
+                return@postDelayed
+            }
+            
+            when (firstPhase) {
+                1 -> startPhase1Measurements()
+                2 -> startPhase2()
+                3 -> startPhase3()
+                // 4 -> startPhase4()  // TODO
+            }
+        }, 3000)
+    }
+    
+    // first scenario to experiment
+    private fun getFirstEnabledPhase(): Int? {
+        if (runScenario1) return 1
+        if (runScenario2) return 2
+        if (runScenario3) return 3
+        if (runScenario4) return 4
+        return null
+    }
+    
+    // next scenario to experiment
+    private fun getNextEnabledPhase(currentPhase: Int): Int? {
+        for (phase in (currentPhase + 1)..4) {
+            when (phase) {
+                2 -> if (runScenario2) return 2
+                3 -> if (runScenario3) return 3
+                4 -> if (runScenario4) return 4
+            }
+        }
+        return null
+    }
+    
+    // ===== Frida control (HTTP) =====
+    // Flask server on 127.0.0.1:5555 (Termux)(this one still need to run manually)
+    // need to run python mobile_frida_server.py (Termux)
+    
+    private val fridaServerUrl = "http://127.0.0.1:5555"
+    
+    private fun sendFridaCommand(endpoint: String, callback: (Boolean) -> Unit) {
+        thread {
+            try {
+                val url = URL("$fridaServerUrl$endpoint")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 15000
+                
+                val responseCode = connection.responseCode
+                connection.disconnect()
+                
+                handler.post {
+                    if (responseCode == 200) {
+                        appendLog("HTTP $endpoint: OK")
+                        callback(true)
+                    } else {
+                        appendLog("HTTP $endpoint: Failed ($responseCode)")
+                        callback(false)
+                    }
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    appendLog("HTTP error: ${e.message}")
+                    callback(false)
+                }
+            }
+        }
+    }
+    
+    private fun startPhase1Measurements() {
+        appendLog("\n=== Scenario 1: Home Carrier (SIM Enabled, WiFi Disabled) ===")
+        
+        // Scenario #1: Enable SIM slot 0 and disable WiFi connection
+        enableSim()
+        disableWifi()
+        disableWifiCalling()
+        
+        handler.postDelayed({
+            if (shouldStop) {
+                finishCollection("Stopped by user")
+                return@postDelayed
+            }
+            currentPhase = 1
+            currentMeasurementCount = 0
+            performMeasurement()
+        }, 3000)
+    }
+    
+    private fun startPhase2() {
+        appendLog("\n=== Scenario 2: Visitor Carrier (SIM Disabled, WiFi Disabled) ===")
+        // updateProgress("Scenario 2: Configuring...")
+        
+        // Scenario #2, Disable SIM slot 0 and disable WiFi connection
+        disableSim()
+        disableWifi()
+        disableWifiCalling()
+        
+        handler.postDelayed({
+            if (shouldStop) {
+                finishCollection("Stopped by user")
+                return@postDelayed
+            }
+            
+            currentPhase = 2
+            currentMeasurementCount = 0
+            performMeasurement()
+        }, 3000)
+    }
+    
+    private fun startPhase3() {
+        appendLog("\n=== Scenario 3: WiFi Calling (SIM Enabled, WiFi Enabled, WiFi Calling Enabled) ===")
+        // updateProgress("Scenario 3: Configuring WiFi Calling...")
+        
+        // Scenario #3: Enable WiFi connection and WiFi calling
+        enableSim()
+        
+        handler.postDelayed({
+            enableWifi()
+            
+            handler.postDelayed({
+                enableWifiCalling()
+                
+                handler.postDelayed({
+                    if (shouldStop) {
+                        finishCollection("Stopped by user")
+                        return@postDelayed
+                    }
+                    
+                    currentPhase = 3
+                    currentMeasurementCount = 0
+                    performMeasurement()
+                }, 2000)  // Wait for WiFi Calling
+            }, 3000)  // Wait for WiFi to connect
+        }, 2000)  // Wait for SIM
+    }
+    
+    private fun performMeasurement() {
+        if (shouldStop) {
+            finishCollection("Stopped by user")
+            return
+        }
+        
+        currentMeasurementCount++
+        val phaseLabel = currentPhase.toString()  // "1", "2", "3", or "4"
+        
+        appendLog("--- Measurement #$currentMeasurementCount (Scenario $currentPhase) ---")
+        
+        // Step 1: Clear logcat buffer
+        clearLogcat()
+        
+        // Step 2: Start Frida blocker
+        appendLog("Starting Frida blocker...")
+        sendFridaCommand("/start-frida") { success ->
+            if (!success) {
+                appendLog("Warning: Frida start failed, continuing anyway")
+            } else {
+                appendLog("Frida blocker started")
+            }
+            
+            // Wait for Frida to be ready
+            handler.postDelayed({
+                if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                
+                // Step 3: Make the call
+                appendLog("Dialing...")
+                makeCall()
+                
+                // Step 4: Wait for call duration, then hang up using tapScreen
+                handler.postDelayed({
+                    if (shouldStop) { endCall(); finishCollection("Stopped by user"); return@postDelayed }
+                    
+                    appendLog("Ending call via tap...")
+                    tapScreen(endCallButtonX, endCallButtonY)
+                    
+                    // Step 5: Wait after hangup, then kill phone app
+                    handler.postDelayed({
+                        if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                        
+                        appendLog("Killing phone app...")
+                        sendFridaCommand("/pkill-phone") { _ ->
+                            // Wait 500ms then send second pkill
+                            handler.postDelayed({
+                                sendFridaCommand("/pkill-phone") { _ ->
+                                    appendLog("Phone app killed")
+                            
+                                    // Step 6: Capture logcat and save
+                                    handler.postDelayed({
+                                        if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                        
+                                        appendLog("Capturing logcat...")
+                                        val logcatData = captureLogcat()
+                                        
+                                        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                                        val logData = buildString {
+                                            append("=== Measurement #$currentMeasurementCount/$totalMeasurementsPerPhase ===\n")
+                                            append("Scenario: $phaseLabel\n")
+                                            append("Time: $timestamp\n")
+                                            append("Location: $gpsLocation\n")
+                                            append("Country: $countryCode\n")
+                                            append("MCC+MNC: $mccMnc\n")
+                                            append("Dial Number: $dialNumber\n\n")
+                                            append("=== LOGCAT (radio) ===\n")
+                                            append(logcatData)
+                                            append("\n=== END LOGCAT ===\n")
+                                        }
+                                        
+                                        val fileName = generateFileName(phaseLabel)
+                                        saveDataToFile(logData, fileName)
+                                        appendLog("Saved: $fileName")
+                                        
+                                        // Step 7: Next measurement or next scenario
+                                        handler.postDelayed({
+                                            if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                            
+                                            if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                performMeasurement()
+                                            } else {
+                                                appendLog("Scenario $currentPhase Complete!")
+                                                val nextPhase = getNextEnabledPhase(currentPhase)
+                                                if (nextPhase != null) {
+                                                    when (nextPhase) {
+                                                        1 -> startPhase1Measurements()
+                                                        2 -> startPhase2()
+                                                        3 -> startPhase3()
+                                                        // 4 -> startPhase4() // TODO
+                                                    }
+                                                } else {
+                                                    finishCollection("All measurements complete!")
+                                                }
+                                            }
+                                        }, delayBetweenCalls)
+                                    }, 1000)  // Brief wait after kill
+                                }
+                            }, 500)  // Delay between pkills
+                        }
+                    }, delayAfterHangup)
+                }, delayCallDuration)
+            }, delayFridaReady)
+        }
+    }
+    
+    private fun stopCollection() {
+        shouldStop = true
+        appendLog("Stopping collection...")
+        // updateProgress("Stopping...")
+    }
+    
+    private fun finishCollection(message: String) {
+        isCollectionRunning = false
+        shouldStop = false
+        
+        // Ensure phone app is killed
+        appendLog("Killing phone app on exit...")
+        sendFridaCommand("/pkill-phone") { _ ->
+            handler.postDelayed({
+                sendFridaCommand("/pkill-phone") { _ ->
+                    appendLog("Phone app killed")
+                }
+            }, 500)
+        }
+        
+        // restoring setting
+        appendLog("Restoring settings...")
+        enableSim()
+        disableWifiCalling()
+        
+        // updateProgress(message)
+        appendLog("=== $message ===")
+        
+        runOnUiThread {
+            btnStartExperiment.isEnabled = true
+            btnStopExperiment.isEnabled = false
+            setInputsEnabled(true)
+        }
+    }
+    
+    private fun setInputsEnabled(enabled: Boolean) {
+        //editDialNumber.isEnabled = enabled
+        btnRefreshGps.isEnabled = enabled
+    }
+    
+    // ===== SIM Control =====
+    
+    private fun enableSim(slot: Int = 0) {
+        appendLog("Enabling SIM slot $slot...")
+        try {
+            // use su shell -c 'command', depends on model // TODO: switch depends on model
+            val cmd = "service call phone 193 i32 $slot i32 1" // Samsung S21
+            // val cmd = "service call phone 185 i32 $slot i32 1" // Samsung S25
+            appendLog("Running: su shell -c '$cmd'")
+            
+            val process = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
+            val exitCode = process.waitFor()
+            
+            val result = process.inputStream.bufferedReader().readText()
+            appendLog("Exit: $exitCode, Result: ${result.take(50)}")
+            
+            if (exitCode == 0) {
+                appendLog("SIM enable command sent successfully")
+            }
+        } catch (e: Exception) {
+            appendLog("SIM enable error: ${e.message}")
+        }
+    }
+    
+    private fun disableSim(slot: Int = 0) {
+        appendLog("Disabling SIM slot $slot...")
+        
+        try {
+            // use su shell -c 'command', depends on model // TODO: switch depends on model
+            val cmd = "service call phone 193 i32 $slot i32 0" // Samsung S21
+            // val cmd = "service call phone 185 i32 $slot i32 0" // Samsung S25
+            appendLog("Running: su shell -c '$cmd'")
+            
+            val process = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
+            val exitCode = process.waitFor()
+            
+            val result = process.inputStream.bufferedReader().readText()
+            val error = process.errorStream.bufferedReader().readText()
+            
+            appendLog("Exit: $exitCode, Result: ${result.take(50)}")
+            if (error.isNotEmpty()) {
+                appendLog("Error: ${error.take(50)}")
+            }
+            
+            if (exitCode == 0) {
+                appendLog("SIM disable command sent successfully")
+            }
+        } catch (e: Exception) {
+            appendLog("SIM disable error: ${e.message}")
+        }
+    }
+    
+    // ===== WiFi Control =====
+    
+    private fun enableWifi() {
+        appendLog("Enabling WiFi...")
+        try {
+            // TODO: add method for Pixel
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "svc wifi enable")) // Samsung S21, Samsung S25
+            val exitCode = process.waitFor()
+            appendLog("WiFi enable: exit code $exitCode")
+        } catch (e: Exception) {
+            appendLog("WiFi enable error: ${e.message}")
+        }
+    }
+    
+    private fun disableWifi() {
+        appendLog("Disabling WiFi...")
+        try {
+            // TODO: add method for Pixel
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "svc wifi disable"))
+            val exitCode = process.waitFor()
+            appendLog("WiFi disable: exit code $exitCode")
+        } catch (e: Exception) {
+            appendLog("WiFi disable error: ${e.message}")
+        }
+    }
+    
+    // ===== WiFi Calling Control =====
+    
+    private fun enableWifiCalling() {
+        appendLog("Enabling WiFi Calling...")
+        try {
+            // Enable WiFi Calling
+            // TODO: add method for Pixel
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_enable1 1")).waitFor() // Samsung S21, Samsung S25
+            // Set preference to WiFi Calling (1 = WiFi preferred)
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_preferred1 1")).waitFor() // Samsung S21, Samsung S25
+            appendLog("WiFi Calling enabled")
+        } catch (e: Exception) {
+            appendLog("WiFi Calling enable error: ${e.message}")
+        }
+    }
+    
+    private fun disableWifiCalling() {
+        appendLog("Disabling WiFi Calling...")
+        try {
+            // Keep enabled but set preference to cellular (2 = Cellular preferred)
+            // TODO: add method for Pixel
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_enable1 1")).waitFor() // Samsung S21, Samsung S25
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_preferred1 2")).waitFor() // Samsung S21, Samsung S25
+            appendLog("WiFi Calling disabled (set to cellular preferred)")
+        } catch (e: Exception) {
+            appendLog("WiFi Calling disable error: ${e.message}")
+        }
+    }
+    
+    // ===== Screen Tap (Root) =====
+    
+    private fun tapScreen(x: Int, y: Int) {
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "input tap $x $y"))
+            val exitCode = process.waitFor()
+            if (exitCode != 0) {
+                appendLog("Tap failed at ($x, $y)")
+            }
+        } catch (e: Exception) {
+            appendLog("Tap error: ${e.message}")
+        }
+    }
+    
+    // ===== Call Functions =====
+    
+    private fun makeCall() {
+        // Scenario 3 uses WiFi Calling number, other use emergency number
+        val numberToCall = if (currentPhase == 3 && wifiCallingNumber.isNotEmpty()) {
+            wifiCallingNumber
+        } else {
+            emergencyNumber.ifEmpty { "911" }
+        }
+        appendLog("Attempting to call: $numberToCall (Scenario $currentPhase)")
+        
+        try {
+            // if it's emergency number, need to use CALL_EMERGENCY
+            val isEmergency = numberToCall in listOf("911", "110", "112", "119", "999")
+            
+            if (isEmergency) {
+                appendLog("Using emergency call method...")
+                
+                // use CALL_EMERGENCY
+                val cmd = "am start -a android.intent.action.CALL_EMERGENCY -d tel:$numberToCall"
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+                val exitCode = process.waitFor()
+                
+                if (exitCode == 0) {
+                    appendLog("Emergency call command sent")
+                } else {
+                    // fallback: normal call
+                    appendLog("Trying regular CALL for emergency...")
+                    val cmd2 = "am start -a android.intent.action.CALL -d tel:$numberToCall"
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", cmd2)).waitFor()
+                }
+            } else {
+                // use CALL
+                val cmd = "am start -a android.intent.action.CALL -d tel:$numberToCall"
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+                val exitCode = process.waitFor()
+                
+                if (exitCode == 0) {
+                    appendLog("Call command sent successfully")
+                } else {
+                    appendLog("Call command failed (exit: $exitCode)")
+                    fallbackCallWithIntent(numberToCall)
+                }
+            }
+        } catch (e: Exception) {
+            appendLog("Call error: ${e.message}")
+            fallbackCallWithIntent(numberToCall)
+        }
+    }
+    
+    private fun fallbackCallWithIntent(number: String) {
+        try {
+            appendLog("Trying fallback Intent method...")
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) 
+                == PackageManager.PERMISSION_GRANTED) {
+                val callIntent = Intent(Intent.ACTION_CALL).apply {
+                    data = Uri.parse("tel:$number")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(callIntent)
+                appendLog("Fallback call initiated")
+            }
+        } catch (e: Exception) {
+            appendLog("Fallback call error: ${e.message}")
+        }
+    }
+    
+    private fun endCall() {
+        appendLog("Ending call via tap...")
+        try {
+            // use tapScreen
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "input tap $endCallButtonX $endCallButtonY"))
+            val exitCode = process.waitFor()
+            
+            if (exitCode == 0) {
+                appendLog("End call tap sent at ($endCallButtonX, $endCallButtonY)")
+            } else {
+                appendLog("Tap failed (exit: $exitCode), trying keyevent...")
+                // Fallback to keyevent
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent ENDCALL")).waitFor()
+            }
+        } catch (e: Exception) {
+            appendLog("End call error: ${e.message}")
+        }
+    }
+    
+    // ===== Cellular Pro (removed - will use scat) =====
+    // TODO: scat
+    
+    // ===== File Operations =====
+    // {country_operator_modelName_deviceID_date_scenario#_experiment#_time_location}.{txt/pcap}
+    // TODO: use database for operator
+    private fun generateFileName(scenarioNum: String): String {
+        val dateFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+        val timeFormat = SimpleDateFormat("HHmmss", Locale.getDefault())
+        val now = Date()
+        val datePart = dateFormat.format(now)
+        val timePart = timeFormat.format(now)
+        val loc = if (gpsLocation.isEmpty()) "unknown" else gpsLocation
+        val safeOperator = operatorName.replace(" ", "").replace("/", "_")
+        val safeModel = modelName.replace(" ", "_")
+        // Format: {country}_{operator}_{model}_{deviceId}_{date}_{scenario}_{experiment}_{time}_{location}.txt
+        return "${countryCode}_${safeOperator}_${safeModel}_${deviceId}_${datePart}_${scenarioNum}_${currentMeasurementCount}_${timePart}_${loc}.txt"
+    }
+    
+    private fun saveDataToFile(data: String, fileName: String) {
+        try {
+            val file = File(getExternalFilesDir(null), fileName)
+            file.writeText(data)
+        } catch (e: Exception) {
+            appendLog("Save error: ${e.message}")
+        }
+    }
+    
+    // ===== Logcat Collection =====
+    // TODO: just radio for now, crash when using -b all
+    private fun clearLogcat() {
+        try {
+            // clear radio buffer
+            Runtime.getRuntime().exec(arrayOf("logcat", "-b", "radio", "-c")).waitFor()
+            // Runtime.getRuntime().exec(arrayOf("logcat", "-b", "main", "-c")).waitFor()
+            appendLog("Logcat cleared (radio + main)")
+        } catch (e: Exception) {
+            appendLog("Clear logcat error: ${e.message}")
+        }
+    }
+    
+    private fun captureLogcat(): String {
+        return try {
+            val dumpPath = "/data/local/tmp/logcat_dump.txt"
+            
+            appendLog("Capturing logcat to: $dumpPath")
+            
+            // write to file
+            val writeProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -b radio -d > $dumpPath"))
+            val writeExit = writeProcess.waitFor()
+            appendLog("Logcat write exit: $writeExit")
+            
+            // read from file
+            val readProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat $dumpPath"))
+            val output = readProcess.inputStream.bufferedReader().readText()
+            readProcess.waitFor()
+            
+            appendLog("Logcat content length: ${output.length} chars")
+            
+            if (output.isEmpty()) {
+                "Logcat dump empty"
+            } else {
+                output
+            }
+        } catch (e: Exception) {
+            appendLog("Logcat error: ${e.message}")
+            "Error: ${e.message}"
+        }
+    }
+    
+    // ===== Utilities =====
+    
+    private fun appendLog(message: String) {
+        runOnUiThread {
+            val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            infoTextView.text = "[$timestamp] $message\n${infoTextView.text}"
+        }
+    }
+    
+    // ===== Permissions =====
+    
+    private fun checkPermissions(): Boolean {
+        return requiredPermissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+    
+    private fun requestPermissions() {
+        ActivityCompat.requestPermissions(this, requiredPermissions, PERMISSION_REQUEST_CODE)
+    }
+    
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+            if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                appendLog("All permissions granted")
+            } else {
+                Toast.makeText(this, "Some permissions denied", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+}
