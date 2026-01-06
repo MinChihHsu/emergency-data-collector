@@ -1,5 +1,6 @@
 package com.emergency.datacollector
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -129,6 +130,9 @@ class MainActivity : AppCompatActivity() {
         spinnerExperimentsCount.adapter = spinnerAdapter
         spinnerExperimentsCount.setSelection(9)  // Default to 10 (index 9)
         
+        // Load MCC-MNC database for operator lookup
+        MccMncLookup.load(this)
+        
         // Load emergency number from strings.xml
         emergencyNumber = getString(R.string.emergency_number)
         dialNumber = emergencyNumber
@@ -139,9 +143,8 @@ class MainActivity : AppCompatActivity() {
         delayAfterHangup = getString(R.string.delay_after_hangup).toLong()
         delayBetweenCalls = getString(R.string.delay_between_calls).toLong()
         
-        // Get device serial number
-        // TODO: serial number?
-        deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+        // Get device ID: IMEI hashed with MD5 (first 12 chars)
+        deviceId = getHashedImei()
         
         updateMccMnc()
         
@@ -282,9 +285,10 @@ class MainActivity : AppCompatActivity() {
             }
             txtMccMnc.text = mccMnc
             
-            // Get operator name from TelephonyManager
+            // operator name: first try CSV lookup, fallback to TelephonyManager
+            val csvBrand = MccMncLookup.getBrand(mccMnc)
             val netOpName = telephonyManager.networkOperatorName
-            operatorName = if (netOpName.isNotEmpty()) netOpName else "Unknown"
+            operatorName = csvBrand ?: (if (netOpName.isNotEmpty()) netOpName else "Unknown")
             
             // get country code (2-letter ISO)
             val networkCountry = telephonyManager.networkCountryIso
@@ -836,7 +840,6 @@ class MainActivity : AppCompatActivity() {
     
     // ===== File Operations =====
     // {country_operator_modelName_deviceID_date_scenario#_experiment#_time_location}.{txt/pcap}
-    // TODO: use database for operator
     private fun generateFileName(scenarioNum: String): String {
         val dateFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HHmmss", Locale.getDefault())
@@ -931,5 +934,67 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Some permissions denied", Toast.LENGTH_LONG).show()
             }
         }
+    }
+    
+    @SuppressLint("HardwareIds")
+    private fun getHashedImei(): String {
+        // Try to get IMEI via root (required for Android 10+)
+        val imei = getImeiViaRoot()
+        
+        return if (imei.isNotEmpty()) {
+            // MD5 hash
+            val md = java.security.MessageDigest.getInstance("MD5")
+            val digest = md.digest(imei.toByteArray())
+            digest.joinToString("") { "%02x".format(it) }
+        } else {
+            // Fallback to ANDROID_ID
+            Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+        }
+    }
+    
+    private fun getImeiViaRoot(): String {
+        // Method 1: Try dumpsys iphonesubinfo
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "dumpsys iphonesubinfo"))
+            val reader = process.inputStream.bufferedReader()
+            val output = reader.readText()
+            reader.close()
+            process.waitFor()
+            
+            // Look for "Device ID" or "IMEI" line
+            val regex = "(?:Device ID|IMEI)\\s*[=:]?\\s*(\\d{15})".toRegex(RegexOption.IGNORE_CASE)
+            val match = regex.find(output)
+            if (match != null) {
+                return match.groupValues[1]
+            }
+        } catch (e: Exception) { }
+        
+        // Method 2: Try getprop
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "getprop persist.radio.imei"))
+            val reader = process.inputStream.bufferedReader()
+            val output = reader.readText().trim()
+            reader.close()
+            process.waitFor()
+            
+            if (output.length >= 15 && output.all { it.isDigit() }) {
+                return output.take(15)
+            }
+        } catch (e: Exception) { }
+        
+        // Method 3: Try reading from efs (Samsung specific)
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat /efs/FactoryApp/serial_no"))
+            val reader = process.inputStream.bufferedReader()
+            val output = reader.readText().trim()
+            reader.close()
+            process.waitFor()
+            
+            if (output.length >= 15) {
+                return output.take(15)
+            }
+        } catch (e: Exception) { }
+        
+        return ""
     }
 }
