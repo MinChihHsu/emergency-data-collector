@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity() {
     private var operatorName: String = "Unknown"  // Carrier name from PLMN lookup // TODO: use database
     private var modelName: String = Build.MODEL  // e.g. SM-G9910
     private var deviceId: String = ""  // Device ID
+    private var modemType: String = "qc"  // Modem type for scat: qc, sec, mtk
     
     // Scenario selection
     private var runScenario1 = true
@@ -416,6 +417,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    private fun sendScatCommand(endpoint: String, jsonBody: String?, callback: (Boolean) -> Unit) {
+        thread {
+            try {
+                val url = URL("$fridaServerUrl$endpoint")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 15000
+                
+                if (jsonBody != null) {
+                    connection.doOutput = true
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.outputStream.bufferedWriter().use { it.write(jsonBody) }
+                }
+                
+                val responseCode = connection.responseCode
+                connection.disconnect()
+                
+                handler.post {
+                    if (responseCode == 200) {
+                        appendLog("SCAT $endpoint: OK")
+                        callback(true)
+                    } else {
+                        appendLog("SCAT $endpoint: Failed ($responseCode)")
+                        callback(false)
+                    }
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    appendLog("SCAT error: ${e.message}")
+                    callback(false)
+                }
+            }
+        }
+    }
+    
+    private fun getModemType(): String {
+        // Determine modem type based on device model
+        return when {
+            modelName.contains("SM-G99", ignoreCase = true) -> "qc"  // S21 series (Qualcomm)
+            modelName.contains("SM-S91", ignoreCase = true) -> "qc"  // S22 series (Qualcomm)
+            modelName.contains("SM-S92", ignoreCase = true) -> "qc"  // S23 series (Qualcomm)
+            modelName.contains("SM-S93", ignoreCase = true) -> "qc"  // S24 series (Qualcomm)
+            modelName.contains("SM-G98", ignoreCase = true) -> "sec" // S20 series (Exynos in some regions)
+            modelName.contains("Pixel", ignoreCase = true) -> "qc"   // Google Pixel
+            else -> "qc"  // Default to Qualcomm
+        }
+    }
+
     private fun startPhase1Measurements() {
         appendLog("\n=== Scenario 1: Home Carrier (SIM Enabled, WiFi Disabled) ===")
         
@@ -494,8 +544,23 @@ class MainActivity : AppCompatActivity() {
         
         appendLog("--- Measurement #$currentMeasurementCount (Scenario $currentPhase) ---")
         
+        // Generate filename for this measurement (used for both logcat and scat)
+        val baseFileName = generateFileName(phaseLabel).replace(".txt", "")
+        val pcapFileName = "$baseFileName.pcap"
+        
         // Step 1: Clear logcat buffer
         clearLogcat()
+        
+        // Step 1.5: Start SCAT recording (PC side)
+        appendLog("Starting SCAT recording...")
+        val scatBody = """{"modem_type": "${getModemType()}", "filename": "$pcapFileName"}"""
+        sendScatCommand("/start-scat", scatBody) { scatSuccess ->
+            if (!scatSuccess) {
+                appendLog("Warning: SCAT start failed, continuing anyway")
+            } else {
+                appendLog("SCAT recording started: $pcapFileName")
+            }
+        }
         
         // Step 2: Start Frida blocker
         appendLog("Starting Frida blocker...")
@@ -521,66 +586,74 @@ class MainActivity : AppCompatActivity() {
                     appendLog("Ending call via tap...")
                     tapScreen(endCallButtonX, endCallButtonY)
                     
-                    // Step 5: Wait after hangup, then kill phone app
+                    // Step 5: Wait after hangup, then stop SCAT first
                     handler.postDelayed({
                         if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
                         
-                        appendLog("Killing phone app...")
-                        sendFridaCommand("/pkill-phone") { _ ->
-                            // Wait 500ms then send second pkill
-                            handler.postDelayed({
-                                sendFridaCommand("/pkill-phone") { _ ->
-                                    appendLog("Phone app killed")
+                        appendLog("Stopping SCAT recording...")
+                        sendScatCommand("/stop-scat", null) { _ ->
+                            appendLog("SCAT recording stopped")
                             
-                                    // Step 6: Capture logcat and save
+                            // Step 6: Kill phone app
+                            handler.postDelayed({
+                                appendLog("Killing phone app...")
+                                sendFridaCommand("/pkill-phone") { _ ->
+                                    // Wait 500ms then send second pkill
                                     handler.postDelayed({
-                                        if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
-                                        
-                                        appendLog("Capturing logcat...")
-                                        val logcatData = captureLogcat()
-                                        
-                                        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                                        val logData = buildString {
-                                            append("=== Measurement #$currentMeasurementCount/$totalMeasurementsPerPhase ===\n")
-                                            append("Scenario: $phaseLabel\n")
-                                            append("Time: $timestamp\n")
-                                            append("Location: $gpsLocation\n")
-                                            append("Country: $countryCode\n")
-                                            append("MCC+MNC: $mccMnc\n")
-                                            append("Dial Number: $dialNumber\n\n")
-                                            append("=== LOGCAT (radio) ===\n")
-                                            append(logcatData)
-                                            append("\n=== END LOGCAT ===\n")
-                                        }
-                                        
-                                        val fileName = generateFileName(phaseLabel)
-                                        saveDataToFile(logData, fileName)
-                                        appendLog("Saved: $fileName")
-                                        
-                                        // Step 7: Next measurement or next scenario
-                                        handler.postDelayed({
-                                            if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
-                                            
-                                            if (currentMeasurementCount < totalMeasurementsPerPhase) {
-                                                performMeasurement()
-                                            } else {
-                                                appendLog("Scenario $currentPhase Complete!")
-                                                val nextPhase = getNextEnabledPhase(currentPhase)
-                                                if (nextPhase != null) {
-                                                    when (nextPhase) {
-                                                        1 -> startPhase1Measurements()
-                                                        2 -> startPhase2()
-                                                        3 -> startPhase3()
-                                                        // 4 -> startPhase4() // TODO
-                                                    }
-                                                } else {
-                                                    finishCollection("All measurements complete!")
+                                        sendFridaCommand("/pkill-phone") { _ ->
+                                            appendLog("Phone app killed")
+                                    
+                                            // Step 7: Capture logcat and save
+                                            handler.postDelayed({
+                                                if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                                
+                                                appendLog("Capturing logcat...")
+                                                val logcatData = captureLogcat()
+                                                
+                                                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                                                val logData = buildString {
+                                                    append("=== Measurement #$currentMeasurementCount/$totalMeasurementsPerPhase ===\n")
+                                                    append("Scenario: $phaseLabel\n")
+                                                    append("Time: $timestamp\n")
+                                                    append("Location: $gpsLocation\n")
+                                                    append("Country: $countryCode\n")
+                                                    append("MCC+MNC: $mccMnc\n")
+                                                    append("Dial Number: $dialNumber\n\n")
+                                                    append("=== LOGCAT (radio) ===\n")
+                                                    append(logcatData)
+                                                    append("\n=== END LOGCAT ===\n")
                                                 }
-                                            }
-                                        }, delayBetweenCalls)
-                                    }, 1000)  // Brief wait after kill
+                                                
+                                                val fileName = generateFileName(phaseLabel)
+                                                saveDataToFile(logData, fileName)
+                                                appendLog("Saved: $fileName")
+                                                
+                                                // Step 8: Next measurement or next scenario
+                                                handler.postDelayed({
+                                                    if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                                    
+                                                    if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                        performMeasurement()
+                                                    } else {
+                                                        appendLog("Scenario $currentPhase Complete!")
+                                                        val nextPhase = getNextEnabledPhase(currentPhase)
+                                                        if (nextPhase != null) {
+                                                            when (nextPhase) {
+                                                                1 -> startPhase1Measurements()
+                                                                2 -> startPhase2()
+                                                                3 -> startPhase3()
+                                                                // 4 -> startPhase4() // TODO
+                                                            }
+                                                        } else {
+                                                            finishCollection("All measurements complete!")
+                                                        }
+                                                    }
+                                                }, delayBetweenCalls)
+                                            }, 1000)  // Brief wait after kill
+                                        }
+                                    }, 500)  // Delay between pkills
                                 }
-                            }, 500)  // Delay between pkills
+                            }, 5000)  // Delay before pkill after scat stop
                         }
                     }, delayAfterHangup)
                 }, delayCallDuration)
