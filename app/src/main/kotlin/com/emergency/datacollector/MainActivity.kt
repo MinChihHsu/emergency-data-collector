@@ -60,10 +60,11 @@ class MainActivity : AppCompatActivity() {
     private var gpsLocation: String = ""  // Format: {n/s}xx.xxxxxx_{e/w}xx.xxxxxx
     private var countryCode: String = "--"  // 2-letter ISO code
     private var mccMnc: String = "000000"  // MCC+MNC
-    private var operatorName: String = "Unknown"  // Carrier name from PLMN lookup // TODO: use database
+    private var operatorName: String = "Unknown"  // Carrier name from PLMN lookup
     private var modelName: String = Build.MODEL  // e.g. SM-G9910
     private var deviceId: String = ""  // Device ID
     private var modemType: String = "qc"  // Modem type for scat: qc, sec, mtk
+    private var enableScat: Boolean = true  // Set to true to enable SCAT recording on PC
     
     // Scenario selection
     private var runScenario1 = true
@@ -456,11 +457,12 @@ class MainActivity : AppCompatActivity() {
     private fun getModemType(): String {
         // Determine modem type based on device model
         return when {
-            modelName.contains("SM-G99", ignoreCase = true) -> "qc"  // S21 series (Qualcomm)
-            modelName.contains("SM-S91", ignoreCase = true) -> "qc"  // S22 series (Qualcomm)
-            modelName.contains("SM-S92", ignoreCase = true) -> "qc"  // S23 series (Qualcomm)
-            modelName.contains("SM-S93", ignoreCase = true) -> "qc"  // S24 series (Qualcomm)
             modelName.contains("SM-G98", ignoreCase = true) -> "sec" // S20 series (Exynos in some regions)
+            modelName.contains("SM-G99", ignoreCase = true) -> "qc"  // S21 series (Qualcomm)
+            modelName.contains("SM-S90", ignoreCase = true) -> "qc"  // S22 series (Qualcomm)
+            modelName.contains("SM-S91", ignoreCase = true) -> "qc"  // S23 series (Qualcomm)
+            modelName.contains("SM-S92", ignoreCase = true) -> "qc"  // S24 series (Qualcomm)
+            modelName.contains("SM-S93", ignoreCase = true) -> "sec"  // S25 series (Samsung)
             modelName.contains("Pixel", ignoreCase = true) -> "qc"   // Google Pixel
             else -> "qc"  // Default to Qualcomm
         }
@@ -551,18 +553,7 @@ class MainActivity : AppCompatActivity() {
         // Step 1: Clear logcat buffer
         clearLogcat()
         
-        // Step 1.5: Start SCAT recording (PC side)
-        appendLog("Starting SCAT recording...")
-        val scatBody = """{"modem_type": "${getModemType()}", "filename": "$pcapFileName"}"""
-        sendScatCommand("/start-scat", scatBody) { scatSuccess ->
-            if (!scatSuccess) {
-                appendLog("Warning: SCAT start failed, continuing anyway")
-            } else {
-                appendLog("SCAT recording started: $pcapFileName")
-            }
-        }
-        
-        // Step 2: Start Frida blocker
+        // Step 2: Start Frida blocker (must be before SCAT)
         appendLog("Starting Frida blocker...")
         sendFridaCommand("/start-frida") { success ->
             if (!success) {
@@ -571,13 +562,14 @@ class MainActivity : AppCompatActivity() {
                 appendLog("Frida blocker started")
             }
             
-            // Wait for Frida to be ready
-            handler.postDelayed({
-                if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
-                
-                // Step 3: Make the call
-                appendLog("Dialing...")
-                makeCall()
+            // Function to proceed to making the call
+            val proceedToMakeCall: () -> Unit = {
+                handler.postDelayed({
+                    if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                    
+                    // Step 4: Make the call
+                    appendLog("Dialing...")
+                    makeCall()
                 
                 // Step 4: Wait for call duration, then hang up using tapScreen
                 handler.postDelayed({
@@ -586,78 +578,111 @@ class MainActivity : AppCompatActivity() {
                     appendLog("Ending call via tap...")
                     tapScreen(endCallButtonX, endCallButtonY)
                     
+                    
                     // Step 5: Wait after hangup, then stop SCAT first
                     handler.postDelayed({
                         if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
                         
-                        appendLog("Stopping SCAT recording...")
-                        sendScatCommand("/stop-scat", null) { _ ->
-                            appendLog("SCAT recording stopped")
-                            
+                        // Function to proceed to kill phone app
+                        val proceedToKillPhone: () -> Unit = {
                             // Step 6: Kill phone app
                             handler.postDelayed({
                                 appendLog("Killing phone app...")
-                                sendFridaCommand("/pkill-phone") { _ ->
-                                    // Wait 500ms then send second pkill
-                                    handler.postDelayed({
-                                        sendFridaCommand("/pkill-phone") { _ ->
-                                            appendLog("Phone app killed")
-                                    
-                                            // Step 7: Capture logcat and save
+                            sendFridaCommand("/pkill-phone") { _ ->
+                                // Wait 500ms then send second pkill
+                                handler.postDelayed({
+                                    sendFridaCommand("/pkill-phone") { _ ->
+                                        appendLog("Phone app killed")
+                                
+                                        // Step 7: Capture logcat and save
+                                        handler.postDelayed({
+                                            if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                            
+                                            appendLog("Capturing logcat...")
+                                            val logcatData = captureLogcat()
+                                            
+                                            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                                            val logData = buildString {
+                                                append("=== Measurement #$currentMeasurementCount/$totalMeasurementsPerPhase ===\n")
+                                                append("Scenario: $phaseLabel\n")
+                                                append("Time: $timestamp\n")
+                                                append("Location: $gpsLocation\n")
+                                                append("Country: $countryCode\n")
+                                                append("MCC+MNC: $mccMnc\n")
+                                                append("Dial Number: $dialNumber\n\n")
+                                                append("=== LOGCAT (radio) ===\n")
+                                                append(logcatData)
+                                                append("\n=== END LOGCAT ===\n")
+                                            }
+                                            
+                                            val fileName = generateFileName(phaseLabel)
+                                            saveDataToFile(logData, fileName)
+                                            appendLog("Saved: $fileName")
+                                            
+                                            // Step 8: Next measurement or next scenario
                                             handler.postDelayed({
                                                 if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
                                                 
-                                                appendLog("Capturing logcat...")
-                                                val logcatData = captureLogcat()
-                                                
-                                                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                                                val logData = buildString {
-                                                    append("=== Measurement #$currentMeasurementCount/$totalMeasurementsPerPhase ===\n")
-                                                    append("Scenario: $phaseLabel\n")
-                                                    append("Time: $timestamp\n")
-                                                    append("Location: $gpsLocation\n")
-                                                    append("Country: $countryCode\n")
-                                                    append("MCC+MNC: $mccMnc\n")
-                                                    append("Dial Number: $dialNumber\n\n")
-                                                    append("=== LOGCAT (radio) ===\n")
-                                                    append(logcatData)
-                                                    append("\n=== END LOGCAT ===\n")
-                                                }
-                                                
-                                                val fileName = generateFileName(phaseLabel)
-                                                saveDataToFile(logData, fileName)
-                                                appendLog("Saved: $fileName")
-                                                
-                                                // Step 8: Next measurement or next scenario
-                                                handler.postDelayed({
-                                                    if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
-                                                    
-                                                    if (currentMeasurementCount < totalMeasurementsPerPhase) {
-                                                        performMeasurement()
-                                                    } else {
-                                                        appendLog("Scenario $currentPhase Complete!")
-                                                        val nextPhase = getNextEnabledPhase(currentPhase)
-                                                        if (nextPhase != null) {
-                                                            when (nextPhase) {
-                                                                1 -> startPhase1Measurements()
-                                                                2 -> startPhase2()
-                                                                3 -> startPhase3()
-                                                                // 4 -> startPhase4() // TODO
-                                                            }
-                                                        } else {
-                                                            finishCollection("All measurements complete!")
+                                                if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                    performMeasurement()
+                                                } else {
+                                                    appendLog("Scenario $currentPhase Complete!")
+                                                    val nextPhase = getNextEnabledPhase(currentPhase)
+                                                    if (nextPhase != null) {
+                                                        when (nextPhase) {
+                                                            1 -> startPhase1Measurements()
+                                                            2 -> startPhase2()
+                                                            3 -> startPhase3()
+                                                            // 4 -> startPhase4() // TODO
                                                         }
+                                                    } else {
+                                                        finishCollection("All measurements complete!")
                                                     }
-                                                }, delayBetweenCalls)
-                                            }, 1000)  // Brief wait after kill
-                                        }
-                                    }, 500)  // Delay between pkills
+                                                }
+                                            }, delayBetweenCalls)
+                                        }, 1000)  // Brief wait after kill
+                                    }
+                                }, 500)  // Delay between pkills
+                            }
+                        }, 1000)  // Wait 1s before pkill
+                        }
+                        
+                        // Step 5.5: Stop SCAT and WAIT for response before killing phone
+                        if (enableScat) {
+                            appendLog("Stopping SCAT recording...")
+                            sendScatCommand("/stop-scat", null) { scatStopSuccess ->
+                                if (scatStopSuccess) {
+                                    appendLog("SCAT stopped successfully")
+                                } else {
+                                    appendLog("Warning: SCAT stop failed")
                                 }
-                            }, 5000)  // Delay before pkill after scat stop
+                                // WAIT for scat callback to return, then proceed
+                                proceedToKillPhone()
+                            }
+                        } else {
+                            proceedToKillPhone()
                         }
                     }, delayAfterHangup)
                 }, delayCallDuration)
             }, delayFridaReady)
+            }
+            
+            // Step 3: Start SCAT and WAIT for response before making call
+            if (enableScat) {
+                appendLog("Starting SCAT recording...")
+                val scatBody = """{"modem_type": "${getModemType()}", "filename": "$pcapFileName"}"""
+                sendScatCommand("/start-scat", scatBody) { scatStartSuccess ->
+                    if (scatStartSuccess) {
+                        appendLog("SCAT started successfully: $pcapFileName")
+                    } else {
+                        appendLog("Warning: SCAT start failed, continuing anyway")
+                    }
+                    // WAIT for scat callback to return, then proceed
+                    proceedToMakeCall()
+                }
+            } else {
+                proceedToMakeCall()
+            }
         }
     }
     
@@ -703,13 +728,37 @@ class MainActivity : AppCompatActivity() {
     
     // ===== SIM Control =====
     
+    /**
+     * Get the service call code for SIM enable/disable based on device model
+     * Different Samsung models use different service call codes
+     */
+    private fun getSimServiceCallCode(): Int {
+        return when {
+            // S25 series
+            modelName.contains("SM-S93", ignoreCase = true) -> 185
+            // S24 series
+            modelName.contains("SM-S92", ignoreCase = true) -> 185
+            // S23 series
+            modelName.contains("SM-S91", ignoreCase = true) -> 185
+            // S22 series
+            modelName.contains("SM-S90", ignoreCase = true) -> 193
+            // S21 series
+            modelName.contains("SM-G99", ignoreCase = true) -> 193
+            // S20 series
+            modelName.contains("SM-G98", ignoreCase = true) -> 193
+            // Pixel 10
+            modelName.contains("Pixel", ignoreCase = true) -> 185
+            // Default to S21 code
+            else -> 193
+        }
+    }
+    
     private fun enableSim(slot: Int = 0) {
         appendLog("Enabling SIM slot $slot...")
         try {
-            // use su shell -c 'command', depends on model // TODO: switch depends on model
-            val cmd = "service call phone 193 i32 $slot i32 1" // Samsung S21
-            // val cmd = "service call phone 185 i32 $slot i32 1" // Samsung S25
-            appendLog("Running: su shell -c '$cmd'")
+            val serviceCode = getSimServiceCallCode()
+            val cmd = "service call phone $serviceCode i32 $slot i32 1"
+            appendLog("Running: su shell -c '$cmd' (model: $modelName)")
             
             val process = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
             val exitCode = process.waitFor()
@@ -729,10 +778,9 @@ class MainActivity : AppCompatActivity() {
         appendLog("Disabling SIM slot $slot...")
         
         try {
-            // use su shell -c 'command', depends on model // TODO: switch depends on model
-            val cmd = "service call phone 193 i32 $slot i32 0" // Samsung S21
-            // val cmd = "service call phone 185 i32 $slot i32 0" // Samsung S25
-            appendLog("Running: su shell -c '$cmd'")
+            val serviceCode = getSimServiceCallCode()
+            val cmd = "service call phone $serviceCode i32 $slot i32 0"
+            appendLog("Running: su shell -c '$cmd' (model: $modelName)")
             
             val process = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
             val exitCode = process.waitFor()
@@ -758,8 +806,8 @@ class MainActivity : AppCompatActivity() {
     private fun enableWifi() {
         appendLog("Enabling WiFi...")
         try {
-            // TODO: add method for Pixel
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "svc wifi enable")) // Samsung S21, Samsung S25
+            // Tested on Samsung S21, Samsung S25, Pixel 10
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "svc wifi enable")) 
             val exitCode = process.waitFor()
             appendLog("WiFi enable: exit code $exitCode")
         } catch (e: Exception) {
@@ -770,7 +818,7 @@ class MainActivity : AppCompatActivity() {
     private fun disableWifi() {
         appendLog("Disabling WiFi...")
         try {
-            // TODO: add method for Pixel
+            // Tested on Samsung S21, Samsung S25, Pixel 10
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "svc wifi disable"))
             val exitCode = process.waitFor()
             appendLog("WiFi disable: exit code $exitCode")
@@ -789,6 +837,7 @@ class MainActivity : AppCompatActivity() {
             Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_enable1 1")).waitFor() // Samsung S21, Samsung S25
             // Set preference to WiFi Calling (1 = WiFi preferred)
             Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_preferred1 1")).waitFor() // Samsung S21, Samsung S25
+            // Tested on Pixel 10 (but need to set wifi call preferred manually)
             appendLog("WiFi Calling enabled")
         } catch (e: Exception) {
             appendLog("WiFi Calling enable error: ${e.message}")
@@ -802,6 +851,7 @@ class MainActivity : AppCompatActivity() {
             // TODO: add method for Pixel
             Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_enable1 1")).waitFor() // Samsung S21, Samsung S25
             Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put system wifi_call_preferred1 2")).waitFor() // Samsung S21, Samsung S25
+            // Tested on Pixel 10 (but need to set wifi call preferred manually)
             appendLog("WiFi Calling disabled (set to cellular preferred)")
         } catch (e: Exception) {
             appendLog("WiFi Calling disable error: ${e.message}")

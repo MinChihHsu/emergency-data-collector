@@ -130,12 +130,19 @@ def start_scat(modem_type, filename):
     """
     global scat_process
     
-    # Stop existing scat if running
+    # IMPORTANT: Force kill any existing scat processes first
+    print("Force killing any existing scat processes...")
     stop_scat_process()
+    time.sleep(2)  # Wait longer for USB resource cleanup
+    
+    # Double check - pkill any orphan scat
+    subprocess.run(['sudo', 'pkill', '-9', 'scat'], capture_output=True)
+    time.sleep(1)  # Wait for OS to release USB
     
     # Find USB port
     usb_port = find_usb_port(modem_type)
     if not usb_port:
+        print("ERROR: USB port not found!")
         return False, "USB port not found"
     
     # Ensure output directory exists
@@ -143,6 +150,10 @@ def start_scat(modem_type, filename):
     
     # Build full path for output file
     output_file = os.path.join(SCAT_OUTPUT_DIR, filename)
+    
+    # Check if file already exists (shouldn't happen, but just in case)
+    if os.path.exists(output_file):
+        print(f"WARNING: File already exists: {output_file}")
     
     # Build scat command
     # Note: Using sudo, make sure sudoers is configured for passwordless scat
@@ -156,6 +167,20 @@ def start_scat(modem_type, filename):
             stderr=subprocess.PIPE
         )
         print(f"scat started (PID: {scat_process.pid})")
+        
+        # Wait a moment to check if process started successfully
+        time.sleep(0.5)
+        if scat_process.poll() is not None:
+            # Process already terminated - something went wrong
+            stderr = scat_process.stderr.read().decode() if scat_process.stderr else ""
+            print(f"ERROR: scat terminated immediately! stderr: {stderr}")
+            return False, f"scat failed to start: {stderr}"
+        
+        # Wait additional time for scat to stabilize and start capturing
+        print("Waiting for scat to stabilize...")
+        time.sleep(2)  # Give scat time to actually start recording
+        
+        print(f"scat running and ready (PID: {scat_process.pid})")
         return True, f"scat started, output: {output_file}"
     except Exception as e:
         print(f"Error starting scat: {e}")
@@ -163,25 +188,51 @@ def start_scat(modem_type, filename):
 
 
 def stop_scat_process():
-    """Stop scat process by sending SIGINT (Ctrl+C)"""
+    """
+    Stop scat process by sending SIGINT (Ctrl+C)
+    Uses sudo kill to ensure signal reaches scat even through sudo wrapper
+    """
     global scat_process
     
     if scat_process is not None:
+        pid = scat_process.pid
+        print(f"Stopping scat (PID: {pid})...")
+        
         try:
-            # Send SIGINT (equivalent to Ctrl+C)
-            scat_process.send_signal(signal.SIGINT)
-            scat_process.wait(timeout=5)
-            print(f"scat stopped (PID: {scat_process.pid})")
+            # Method 1: Use sudo pkill to send SIGINT to scat directly (most reliable)
+            # This bypasses the sudo wrapper issue
+            print("Sending SIGINT via sudo pkill...")
+            subprocess.run(['sudo', 'pkill', '-INT', '-f', 'scat'], capture_output=True, timeout=3)
+            
+            # Wait for our process to finish
+            scat_process.wait(timeout=8)  # Give more time for file flush
+            print(f"scat stopped gracefully (PID: {pid})")
+            
         except subprocess.TimeoutExpired:
-            scat_process.kill()
-            print("scat killed (timeout)")
+            print(f"scat timeout after SIGINT, sending SIGTERM...")
+            try:
+                # Try SIGTERM
+                subprocess.run(['sudo', 'pkill', '-TERM', '-f', 'scat'], capture_output=True, timeout=2)
+                scat_process.wait(timeout=3)
+                print("scat stopped with SIGTERM")
+            except:
+                # Last resort: SIGKILL
+                print(f"scat still not responding, force killing (SIGKILL)...")
+                subprocess.run(['sudo', 'pkill', '-9', '-f', 'scat'], capture_output=True)
+                try:
+                    scat_process.wait(timeout=2)
+                except:
+                    pass
+                print("scat killed (force)")
+                
         except Exception as e:
             print(f"Error stopping scat: {e}")
         finally:
             scat_process = None
-    
-    # Also try to kill any orphan scat processes
-    subprocess.run(['sudo', 'pkill', '-INT', 'scat'], capture_output=True)
+    else:
+        print("No scat process to stop")
+        # Still try to clean up any orphan processes
+        subprocess.run(['sudo', 'pkill', '-INT', '-f', 'scat'], capture_output=True)
 
 
 @app.route('/start-frida', methods=['POST'])

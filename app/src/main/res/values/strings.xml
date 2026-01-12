@@ -17,8 +17,8 @@
 
     <!-- Timing Configuration (ms) -->
     <string name="delay_frida_ready">3000</string>
-    <string name="delay_call_duration">8000</string>
-    <string name="delay_after_hangup">2000</string>
+    <string name="delay_call_duration">15000</string>
+    <string name="delay_after_hangup">5000</string>
     <string name="delay_between_calls">5000</string>
 
     <!-- Accessibility Service -->
