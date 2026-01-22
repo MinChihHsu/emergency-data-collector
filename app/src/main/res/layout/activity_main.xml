@@ -2,7 +2,7 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FAFAFA">
+    android:background="#FFFFFF">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -17,7 +17,7 @@
             android:text="Configuration"
             android:textSize="18sp"
             android:textStyle="bold"
-            android:textColor="#333333"
+            android:textColor="#000000"
             android:layout_marginBottom="8dp" />
 
         <!-- Country Code Row -->
@@ -31,6 +31,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Country:"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:layout_marginEnd="8dp" />
 
@@ -40,6 +41,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="--"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:padding="8dp" />
         </LinearLayout>
@@ -55,6 +57,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="MCC+MNC:"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:layout_marginEnd="8dp" />
 
@@ -64,6 +67,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="000000"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:padding="8dp" />
         </LinearLayout>
@@ -79,6 +83,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Location:"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:layout_marginEnd="8dp" />
 
@@ -88,6 +93,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Getting GPS..."
+                android:textColor="#000000"
                 android:textSize="12sp"
                 android:padding="8dp" />
 
@@ -111,6 +117,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Emergency Number:"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:layout_marginEnd="8dp" />
 
@@ -120,6 +127,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="@string/emergency_number"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:padding="8dp" />
         </LinearLayout>
@@ -135,6 +143,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="WiFi Calling Number:"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:layout_marginEnd="8dp" />
 
@@ -144,6 +153,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:hint="For scenario #3"
+                android:textColor="#000000"
                 android:inputType="phone"
                 android:padding="8dp"
                 android:background="@android:drawable/edit_text" />
@@ -154,6 +164,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Scenarios:"
+            android:textColor="#000000"
             android:textSize="14sp"
             android:layout_marginBottom="4dp" />
 
@@ -170,6 +181,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="emc w/ SIM"
+                android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
 
@@ -179,6 +191,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="emc w/o SIM"
+                android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
         </LinearLayout>
@@ -196,6 +209,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="WiFi Calling"
+                android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
 
@@ -205,6 +219,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Satellite"
+                android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
         </LinearLayout>
@@ -221,6 +236,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="# of experiments per scenario:"
+                android:textColor="#000000"
                 android:textSize="14sp"
                 android:layout_marginEnd="8dp" />
 
@@ -228,6 +244,7 @@
                 android:id="@+id/spinnerExperimentsCount"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
+                android:popupBackground="#000000"
                 android:padding="4dp" />
         </LinearLayout>
 
