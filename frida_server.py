@@ -6,6 +6,7 @@ run on Mac/Ubuntu
 2. sudo python frida_server.py (sudo for scat)
 3. adb reverse tcp:5555 tcp:5555
 4. adb run frida-server on cellphone (for now)
+5. Grant this app as an superuser in Magisk(for am command)
 
 * check the DIR of scripts first
 * TODO: revise to python arguments
@@ -21,8 +22,14 @@ import re
 app = Flask(__name__)
 
 SCRIPT_DIR = "/Users/minchihhsu/Downloads/app"
-GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_gsm_dial.js")
-USERAGENT_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_useragent.js")
+
+# Samsung S21 Frida scripts
+S21_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_gsm_dial.js")
+S21_USERAGENT_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_useragent.js")
+
+# Pixel 9 Frida scripts
+PIXEL_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_gsm_dial.js")
+PIXEL_CALLSESSION_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_callsessionadaptor.js")
 
 # Output directory for scat pcap files
 SCAT_OUTPUT_DIR = "/Users/minchihhsu/Downloads/scat_output"
@@ -30,9 +37,12 @@ SCAT_OUTPUT_DIR = "/Users/minchihhsu/Downloads/scat_output"
 # USB Vendor IDs for different modem types
 USB_VENDOR_IDS = {
     "qc": "05c6",      # Qualcomm
-    "sec": "04e8",     # Samsung (Exynos)
+    "sec": "04e8",     # Google Pixel (uses sec modem but Google USB ID)
     "mtk": "0e8d",     # MediaTek
 }
+
+# Current device type (set by /start-frida request)
+current_device_type = "samsung"  # "samsung" or "pixel"
 
 frida_processes = []
 scat_process = None
@@ -54,41 +64,81 @@ def kill_frida_processes():
     subprocess.run(['killall', 'frida'], capture_output=True)
 
 
-def start_frida_scripts():
-    global frida_processes
+def start_frida_scripts(device_type="samsung"):
+    """
+    Start Frida scripts based on device type.
+    device_type: "samsung" or "pixel"
+    """
+    global frida_processes, current_device_type
+    current_device_type = device_type
     
     kill_frida_processes()
     time.sleep(0.5)
     
     devnull = subprocess.DEVNULL
     
-    # gsm_dial
-    try:
-        proc1 = subprocess.Popen(
-            ['frida', '-U', '-n', 'com.android.phone', '-l', GSM_DIAL_SCRIPT],
-            stdout=devnull,
-            stderr=devnull
-        )
-        frida_processes.append(proc1)
-        print(f"Started frida for com.android.phone (PID: {proc1.pid})")
-    except Exception as e:
-        print(f"Error starting gsm_dial script: {e}")
-        return False
-    
-    time.sleep(1)
-    
-    # useragent
-    try:
-        proc2 = subprocess.Popen(
-            ['frida', '-U', '-n', 'com.sec.imsservice', '-l', USERAGENT_SCRIPT],
-            stdout=devnull,
-            stderr=devnull
-        )
-        frida_processes.append(proc2)
-        print(f"Started frida for com.sec.imsservice (PID: {proc2.pid})")
-    except Exception as e:
-        print(f"Error starting useragent script: {e}")
-        return False
+    if device_type == "pixel":
+        # Pixel 9 scripts
+        print(f"Starting Frida for Pixel device...")
+        
+        # gsm_dial for Pixel
+        try:
+            proc1 = subprocess.Popen(
+                ['frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_GSM_DIAL_SCRIPT],
+                stdout=devnull,
+                stderr=devnull
+            )
+            frida_processes.append(proc1)
+            print(f"Started frida for com.android.phone (Pixel) (PID: {proc1.pid})")
+        except Exception as e:
+            print(f"Error starting Pixel gsm_dial script: {e}")
+            return False
+        
+        time.sleep(1)
+        
+        # callsessionadaptor for Pixel (using com.shannon.imsservice)
+        try:
+            proc2 = subprocess.Popen(
+                ['frida', '-U', '-n', 'com.shannon.imsservice', '-l', PIXEL_CALLSESSION_SCRIPT],
+                stdout=devnull,
+                stderr=devnull
+            )
+            frida_processes.append(proc2)
+            print(f"Started frida for com.shannon.imsservice (Pixel) (PID: {proc2.pid})")
+        except Exception as e:
+            print(f"Error starting Pixel callsession script: {e}")
+            return False
+    else:
+        # Samsung S21 scripts (default)
+        print(f"Starting Frida for Samsung device...")
+        
+        # gsm_dial for Samsung
+        try:
+            proc1 = subprocess.Popen(
+                ['frida', '-U', '-n', 'com.android.phone', '-l', S21_GSM_DIAL_SCRIPT],
+                stdout=devnull,
+                stderr=devnull
+            )
+            frida_processes.append(proc1)
+            print(f"Started frida for com.android.phone (Samsung) (PID: {proc1.pid})")
+        except Exception as e:
+            print(f"Error starting Samsung gsm_dial script: {e}")
+            return False
+        
+        time.sleep(1)
+        
+        # useragent for Samsung
+        try:
+            proc2 = subprocess.Popen(
+                ['frida', '-U', '-n', 'com.sec.imsservice', '-l', S21_USERAGENT_SCRIPT],
+                stdout=devnull,
+                stderr=devnull
+            )
+            frida_processes.append(proc2)
+            print(f"Started frida for com.sec.imsservice (Samsung) (PID: {proc2.pid})")
+        except Exception as e:
+            print(f"Error starting Samsung useragent script: {e}")
+            return False
     
     return True
 
@@ -126,7 +176,8 @@ def find_usb_port(modem_type):
 def start_scat(modem_type, filename):
     """
     Start scat process to capture cellular signaling.
-    Command: sudo scat -t <modem> -u -a <port> -i 0 -F <filename>
+    Command for qc: sudo scat -t qc -u -a <port> -i 0 -F <filename>
+    Command for sec (Pixel): sudo scat -t sec -u -a <port> -i 0 --start-magic 0x34dc12fe -F <filename>
     """
     global scat_process
     
@@ -155,9 +206,14 @@ def start_scat(modem_type, filename):
     if os.path.exists(output_file):
         print(f"WARNING: File already exists: {output_file}")
     
-    # Build scat command
-    # Note: Using sudo, make sure sudoers is configured for passwordless scat
-    cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-a', usb_port, '-i', '0', '-F', output_file]
+    # Build scat command based on modem type
+    # For sec (Pixel/Exynos): add --start-magic flag
+    if modem_type == "sec":
+        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-a', usb_port, '-i', '0', 
+               '--start-magic', '0x34dc12fe', '-F', output_file]
+    else:
+        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-a', usb_port, '-i', '0', '-F', output_file]
+    
     print(f"Starting scat: {' '.join(cmd)}")
     
     try:
@@ -237,11 +293,22 @@ def stop_scat_process():
 
 @app.route('/start-frida', methods=['POST'])
 def start_frida():
+    """
+    Start Frida scripts.
+    Expected JSON body: { "device_type": "samsung" } or { "device_type": "pixel" }
+    If no body, defaults to "samsung"
+    """
     print("\n=== Received: /start-frida ===")
-    success = start_frida_scripts()
+    
+    data = request.get_json() or {}
+    device_type = data.get('device_type', 'samsung')  # Default to Samsung
+    
+    print(f"Device type: {device_type}")
+    
+    success = start_frida_scripts(device_type)
     return jsonify({
         "status": "ok" if success else "error",
-        "message": "Frida scripts started" if success else "Failed to start"
+        "message": f"Frida scripts started for {device_type}" if success else "Failed to start"
     })
 
 

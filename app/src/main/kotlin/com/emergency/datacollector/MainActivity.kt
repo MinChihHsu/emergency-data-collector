@@ -87,9 +87,31 @@ class MainActivity : AppCompatActivity() {
     private var delayAfterHangup = 2000L
     private var delayBetweenCalls = 5000L
     
-    // End call button coordinates (for emergency calls, samsung S21)
-    private var endCallButtonX = 585
-    private var endCallButtonY = 2012
+    // End call button coordinates (device-specific)
+    private var endCallButtonX = 0
+    private var endCallButtonY = 0
+    
+    private fun initEndCallButtonCoordinates() {
+        // Set coordinates based on device model
+        when {
+            modelName.contains("Pixel", ignoreCase = true) -> {
+                // Pixel 10
+                endCallButtonX = 542
+                endCallButtonY = 2207
+            }
+            modelName.contains("SM-G99", ignoreCase = true) -> {
+                // Samsung S21
+                endCallButtonX = 585
+                endCallButtonY = 2012
+            }
+            else -> {
+                // Default (Samsung S21)
+                endCallButtonX = 585
+                endCallButtonY = 2012
+            }
+        }
+        appendLog("End call button: ($endCallButtonX, $endCallButtonY) for $modelName")
+    }
     
     private lateinit var prefs: SharedPreferences
 
@@ -147,6 +169,9 @@ class MainActivity : AppCompatActivity() {
         
         // Get device ID: IMEI hashed with MD5 (first 12 chars)
         deviceId = getHashedImei()
+        
+        // Initialize device-specific end call button coordinates
+        initEndCallButtonCoordinates()
         
         updateMccMnc()
         
@@ -388,7 +413,7 @@ class MainActivity : AppCompatActivity() {
     
     private val fridaServerUrl = "http://127.0.0.1:5555"
     
-    private fun sendFridaCommand(endpoint: String, callback: (Boolean) -> Unit) {
+    private fun sendFridaCommand(endpoint: String, jsonBody: String? = null, callback: (Boolean) -> Unit) {
         thread {
             try {
                 val url = URL("$fridaServerUrl$endpoint")
@@ -396,6 +421,12 @@ class MainActivity : AppCompatActivity() {
                 connection.requestMethod = "POST"
                 connection.connectTimeout = 10000
                 connection.readTimeout = 15000
+                
+                if (jsonBody != null) {
+                    connection.doOutput = true
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.outputStream.bufferedWriter().use { it.write(jsonBody) }
+                }
                 
                 val responseCode = connection.responseCode
                 connection.disconnect()
@@ -415,6 +446,14 @@ class MainActivity : AppCompatActivity() {
                     callback(false)
                 }
             }
+        }
+    }
+    
+    private fun getDeviceType(): String {
+        // Determine device type for Frida scripts (samsung or pixel)
+        return when {
+            modelName.contains("Pixel", ignoreCase = true) -> "pixel"
+            else -> "samsung"
         }
     }
     
@@ -458,12 +497,12 @@ class MainActivity : AppCompatActivity() {
         // Determine modem type based on device model
         return when {
             modelName.contains("SM-G98", ignoreCase = true) -> "sec" // S20 series (Exynos in some regions)
-            modelName.contains("SM-G99", ignoreCase = true) -> "qc"  // S21 series (Qualcomm)
-            modelName.contains("SM-S90", ignoreCase = true) -> "qc"  // S22 series (Qualcomm)
-            modelName.contains("SM-S91", ignoreCase = true) -> "qc"  // S23 series (Qualcomm)
-            modelName.contains("SM-S92", ignoreCase = true) -> "qc"  // S24 series (Qualcomm)
-            modelName.contains("SM-S93", ignoreCase = true) -> "sec"  // S25 series (Samsung)
-            modelName.contains("Pixel", ignoreCase = true) -> "qc"   // Google Pixel
+            modelName.contains("SM-G99", ignoreCase = true) -> "qc"  // S21 series
+            modelName.contains("SM-S90", ignoreCase = true) -> "qc"  // S22 series
+            modelName.contains("SM-S91", ignoreCase = true) -> "qc"  // S23 series
+            modelName.contains("SM-S92", ignoreCase = true) -> "qc"  // S24 series
+            modelName.contains("SM-S93", ignoreCase = true) -> "qc"  // S25 series
+            modelName.contains("Pixel", ignoreCase = true) -> "sec"   // Google Pixel
             else -> "qc"  // Default to Qualcomm
         }
     }
@@ -517,9 +556,11 @@ class MainActivity : AppCompatActivity() {
         
         handler.postDelayed({
             enableWifi()
+            appendLog("Waiting for WiFi to connect...")
             
             handler.postDelayed({
                 enableWifiCalling()
+                appendLog("Waiting for WiFi Calling to register...")
                 
                 handler.postDelayed({
                     if (shouldStop) {
@@ -530,8 +571,8 @@ class MainActivity : AppCompatActivity() {
                     currentPhase = 3
                     currentMeasurementCount = 0
                     performMeasurement()
-                }, 2000)  // Wait for WiFi Calling
-            }, 3000)  // Wait for WiFi to connect
+                }, 5000)  // Wait for WiFi Calling to register (increased from 2000)
+            }, 8000)  // Wait for WiFi to connect (increased from 3000)
         }, 2000)  // Wait for SIM
     }
 
@@ -575,7 +616,8 @@ class MainActivity : AppCompatActivity() {
         appendLog("Starting Frida blocker...")
 
         val fridaEndpoint = if (currentPhase == 4) "/start-frida-satellite" else "/start-frida"
-        sendFridaCommand(fridaEndpoint) { success ->
+        val deviceTypeBody = """{"device_type": "${getDeviceType()}"}"""
+        sendFridaCommand(fridaEndpoint, deviceTypeBody) { success ->
             if (!success) {
                 appendLog("Warning: Frida start failed, continuing anyway")
             } else {
@@ -613,30 +655,19 @@ class MainActivity : AppCompatActivity() {
                                             sendFridaCommand("/pkill-phone") { _ ->
                                                 appendLog("Phone app killed")
 
-                                                // Step 8: Capture logcat and save
+                                                // Step 8: Capture logcat and save (multiple buffers)
                                                 handler.postDelayed({
                                                     if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
 
-                                                    appendLog("Capturing logcat...")
-                                                    val logcatData = captureLogcat()
-
-                                                    val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                                                    val logData = buildString {
-                                                        append("=== Measurement #$currentMeasurementCount/$totalMeasurementsPerPhase ===\n")
-                                                        append("Scenario: $phaseLabel\n")
-                                                        append("Time: $timestamp\n")
-                                                        append("Location: $gpsLocation\n")
-                                                        append("Country: $countryCode\n")
-                                                        append("MCC+MNC: $mccMnc\n")
-                                                        append("Dial Number: $dialNumber\n\n")
-                                                        append("=== LOGCAT (radio) ===\n")
-                                                        append(logcatData)
-                                                        append("\n=== END LOGCAT ===\n")
-                                                    }
-
-                                                    val fileName = generateFileName(phaseLabel)
-                                                    saveDataToFile(logData, fileName)
-                                                    appendLog("Saved: $fileName")
+                                                    appendLog("Capturing logcat (multiple buffers)...")
+                                                    
+                                                    // Generate base filename (without .txt extension)
+                                                    val baseFileName = generateFileName(phaseLabel).replace(".txt", "")
+                                                    
+                                                    // Save each logcat buffer to separate file
+                                                    saveLogcatMultiBuffer(baseFileName)
+                                                    
+                                                    appendLog("Saved: ${baseFileName}_*.txt")
 
                                                     // Step 9: Next measurement or next scenario
                                                     handler.postDelayed({
@@ -736,30 +767,19 @@ class MainActivity : AppCompatActivity() {
                                                             sendFridaCommand("/pkill-phone") { _ ->
                                                                 appendLog("Phone app killed")
 
-                                                                // Step 8: Capture logcat and save
+                                                                // Step 8: Capture logcat and save (multiple buffers)
                                                                 handler.postDelayed({
                                                                     if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
 
-                                                                    appendLog("Capturing logcat...")
-                                                                    val logcatData = captureLogcat()
-
-                                                                    val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                                                                    val logData = buildString {
-                                                                        append("=== Measurement #$currentMeasurementCount/$totalMeasurementsPerPhase ===\n")
-                                                                        append("Scenario: $phaseLabel\n")
-                                                                        append("Time: $timestamp\n")
-                                                                        append("Location: $gpsLocation\n")
-                                                                        append("Country: $countryCode\n")
-                                                                        append("MCC+MNC: $mccMnc\n")
-                                                                        append("Dial Number: Satellite SOS\n\n")
-                                                                        append("=== LOGCAT (radio) ===\n")
-                                                                        append(logcatData)
-                                                                        append("\n=== END LOGCAT ===\n")
-                                                                    }
-
-                                                                    val fileName = generateFileName(phaseLabel)
-                                                                    saveDataToFile(logData, fileName)
-                                                                    appendLog("Saved: $fileName")
+                                                                    appendLog("Capturing logcat (multiple buffers)...")
+                                                                    
+                                                                    // Generate base filename (without .txt extension)
+                                                                    val baseFileName = generateFileName(phaseLabel).replace(".txt", "")
+                                                                    
+                                                                    // Save each logcat buffer to separate file
+                                                                    saveLogcatMultiBuffer(baseFileName)
+                                                                    
+                                                                    appendLog("Saved: ${baseFileName}_*.txt")
 
                                                                     // Next measurement or next scenario
                                                                     handler.postDelayed({
@@ -1173,16 +1193,32 @@ class MainActivity : AppCompatActivity() {
                 
                 // use CALL_EMERGENCY
                 val cmd = "am start -a android.intent.action.CALL_EMERGENCY -d tel:$numberToCall"
+                appendLog("Running: su -c '$cmd'")
+                
                 val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 val exitCode = process.waitFor()
+                val errorOutput = process.errorStream.bufferedReader().readText()
                 
-                if (exitCode == 0) {
-                    appendLog("Emergency call command sent")
+                appendLog("Exit code: $exitCode")
+                if (errorOutput.isNotEmpty()) {
+                    appendLog("Error: ${errorOutput.take(100)}")
+                }
+                
+                if (exitCode != 0) {
+                    // Try alternative: su shell -c (some devices need this)
+                    appendLog("Trying: su shell -c...")
+                    val process2 = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
+                    val exitCode2 = process2.waitFor()
+                    appendLog("su shell -c exit: $exitCode2")
+                    
+                    if (exitCode2 != 0) {
+                        // fallback: normal call
+                        appendLog("Trying regular CALL for emergency...")
+                        val cmd2 = "am start -a android.intent.action.CALL -d tel:$numberToCall"
+                        Runtime.getRuntime().exec(arrayOf("su", "-c", cmd2)).waitFor()
+                    }
                 } else {
-                    // fallback: normal call
-                    appendLog("Trying regular CALL for emergency...")
-                    val cmd2 = "am start -a android.intent.action.CALL -d tel:$numberToCall"
-                    Runtime.getRuntime().exec(arrayOf("su", "-c", cmd2)).waitFor()
+                    appendLog("Emergency call command sent")
                 }
             } else {
                 // use CALL
@@ -1270,41 +1306,66 @@ class MainActivity : AppCompatActivity() {
     // TODO: just radio for now, crash when using -b all
     private fun clearLogcat() {
         try {
-            // clear radio buffer
-            Runtime.getRuntime().exec(arrayOf("logcat", "-b", "radio", "-c")).waitFor()
-            // Runtime.getRuntime().exec(arrayOf("logcat", "-b", "main", "-c")).waitFor()
-            appendLog("Logcat cleared (radio + main)")
+            // Clear all buffers that we capture
+            val buffers = listOf("radio", "events", "main", "system")
+            for (buffer in buffers) {
+                Runtime.getRuntime().exec(arrayOf("logcat", "-b", buffer, "-c")).waitFor()
+            }
+            appendLog("Logcat cleared (radio, events, main, system)")
         } catch (e: Exception) {
             appendLog("Clear logcat error: ${e.message}")
         }
     }
     
-    private fun captureLogcat(): String {
-        return try {
-            val dumpPath = "/data/local/tmp/logcat_dump.txt"
-            
-            appendLog("Capturing logcat to: $dumpPath")
-            
-            // write to file
-            val writeProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -b radio -d > $dumpPath"))
-            val writeExit = writeProcess.waitFor()
-            appendLog("Logcat write exit: $writeExit")
-            
-            // read from file
-            val readProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat $dumpPath"))
-            val output = readProcess.inputStream.bufferedReader().readText()
-            readProcess.waitFor()
-            
-            appendLog("Logcat content length: ${output.length} chars")
-            
-            if (output.isEmpty()) {
-                "Logcat dump empty"
-            } else {
-                output
+    /**
+     * Capture multiple logcat buffers to separate files
+     * Returns a map of buffer name to content
+     */
+    private fun captureLogcatMultiBuffer(): Map<String, String> {
+        val buffers = listOf("radio", "events", "main", "system")
+        val results = mutableMapOf<String, String>()
+        
+        for (buffer in buffers) {
+            try {
+                val dumpPath = "/data/local/tmp/logcat_${buffer}.txt"
+                
+                appendLog("Capturing logcat -b $buffer...")
+                
+                // Write to file
+                val writeProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -b $buffer -d > $dumpPath"))
+                val writeExit = writeProcess.waitFor()
+                
+                if (writeExit == 0) {
+                    // Read from file
+                    val readProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat $dumpPath"))
+                    val output = readProcess.inputStream.bufferedReader().readText()
+                    readProcess.waitFor()
+                    
+                    results[buffer] = output
+                    appendLog("Buffer $buffer: ${output.length} chars")
+                } else {
+                    results[buffer] = "Error capturing buffer (exit: $writeExit)"
+                }
+            } catch (e: Exception) {
+                results[buffer] = "Error: ${e.message}"
             }
-        } catch (e: Exception) {
-            appendLog("Logcat error: ${e.message}")
-            "Error: ${e.message}"
+        }
+        
+        return results
+    }
+    
+    /**
+     * Save multiple logcat buffers to separate files
+     */
+    private fun saveLogcatMultiBuffer(baseFileName: String) {
+        val bufferData = captureLogcatMultiBuffer()
+        
+        for ((buffer, content) in bufferData) {
+            if (content.isNotEmpty() && !content.startsWith("Error")) {
+                val fileName = "${baseFileName}_${buffer}.txt"
+                saveDataToFile(content, fileName)
+                appendLog("Saved: $fileName")
+            }
         }
     }
     
