@@ -18,14 +18,15 @@ import os
 import signal
 import time
 import re
+import select  # NEW
 
 app = Flask(__name__)
 
 ###  ---- USER SET VARIABLES ----
-# Directory of where frida scripts are located. 
-SCRIPT_DIR = "/Users/minchihhsu/Downloads/app"
+# Directory of where frida scripts are located.
+SCRIPT_DIR = "scripts"
 # Output directory for scat pcap files
-SCAT_OUTPUT_DIR = "/Users/minchihhsu/Downloads/scat_output"
+SCAT_OUTPUT_DIR = "scat_output"
 
 
 # Samsung S21 Frida scripts
@@ -35,7 +36,6 @@ S21_USERAGENT_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_useragent.js")
 # Pixel 9 Frida scripts
 PIXEL_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_gsm_dial.js")
 PIXEL_CALLSESSION_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_callsessionadaptor.js")
-
 
 
 # USB Vendor IDs for different modem types
@@ -52,6 +52,39 @@ frida_processes = []
 scat_process = None
 
 
+def wait_for_marker(proc, marker, timeout_s=2.0):
+    """
+    Wait until proc stdout contains marker.
+    Returns (True, collected_output_tail) or (False, collected_output_tail)
+    """
+    if proc.stdout is None:
+        return False, ""
+
+    end = time.monotonic() + timeout_s
+    tail = []
+
+    while time.monotonic() < end:
+        # If process died early, stop
+        if proc.poll() is not None:
+            break
+
+        rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+        if rlist:
+            line = proc.stdout.readline()
+            if not line:
+                continue
+            tail.append(line.rstrip())
+
+            # Optional early fail if script reports error
+            if "FRIDA_ERROR:" in line:
+                return False, "\n".join(tail[-50:])
+
+            if marker in line:
+                return True, "\n".join(tail[-50:])
+
+    return False, "\n".join(tail[-50:])
+
+
 def kill_frida_processes():
     global frida_processes
     for proc in frida_processes:
@@ -64,7 +97,7 @@ def kill_frida_processes():
             except:
                 pass
     frida_processes = []
-    
+
     subprocess.run(['killall', 'frida'], capture_output=True)
 
 
@@ -72,78 +105,108 @@ def start_frida_scripts(device_type="samsung"):
     """
     Start Frida scripts based on device type.
     device_type: "samsung" or "pixel"
+
+    Success criteria (stronger):
+    - both frida processes started
+    - both scripts printed their FRIDA_READY:<script_id> marker within 2s
     """
     global frida_processes, current_device_type
     current_device_type = device_type
-    
+
     kill_frida_processes()
     time.sleep(0.5)
-    
-    devnull = subprocess.DEVNULL
-    
+
     if device_type == "pixel":
-        # Pixel 9 scripts
         print(f"Starting Frida for Pixel device...")
-        
+
         # gsm_dial for Pixel
         try:
             proc1 = subprocess.Popen(
                 ['frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_GSM_DIAL_SCRIPT],
-                stdout=devnull,
-                stderr=devnull
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
             frida_processes.append(proc1)
             print(f"Started frida for com.android.phone (Pixel) (PID: {proc1.pid})")
         except Exception as e:
             print(f"Error starting Pixel gsm_dial script: {e}")
             return False
-        
+
         time.sleep(1)
-        
+
         # callsessionadaptor for Pixel (using com.shannon.imsservice)
         try:
             proc2 = subprocess.Popen(
                 ['frida', '-U', '-n', 'com.shannon.imsservice', '-l', PIXEL_CALLSESSION_SCRIPT],
-                stdout=devnull,
-                stderr=devnull
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
             frida_processes.append(proc2)
             print(f"Started frida for com.shannon.imsservice (Pixel) (PID: {proc2.pid})")
         except Exception as e:
             print(f"Error starting Pixel callsession script: {e}")
             return False
+
+        # NEW: wait for ready markers (2s timeout each)
+        ok1, out1 = wait_for_marker(proc1, "FRIDA_READY:pixel9_void_gsm_dial", timeout_s=2.0)
+        ok2, out2 = wait_for_marker(proc2, "FRIDA_READY:pixel9_void_callsessionadaptor", timeout_s=2.0)
+
+        if not (ok1 and ok2):
+            print("Frida ready timeout or failure (Pixel).")
+            print("proc1 tail:\n", out1)
+            print("proc2 tail:\n", out2)
+            return False
+
     else:
         # Samsung S21 scripts (default)
         print(f"Starting Frida for Samsung device...")
-        
+
         # gsm_dial for Samsung
         try:
             proc1 = subprocess.Popen(
                 ['frida', '-U', '-n', 'com.android.phone', '-l', S21_GSM_DIAL_SCRIPT],
-                stdout=devnull,
-                stderr=devnull
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
             frida_processes.append(proc1)
             print(f"Started frida for com.android.phone (Samsung) (PID: {proc1.pid})")
         except Exception as e:
             print(f"Error starting Samsung gsm_dial script: {e}")
             return False
-        
+
         time.sleep(1)
-        
+
         # useragent for Samsung
         try:
             proc2 = subprocess.Popen(
                 ['frida', '-U', '-n', 'com.sec.imsservice', '-l', S21_USERAGENT_SCRIPT],
-                stdout=devnull,
-                stderr=devnull
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
             frida_processes.append(proc2)
             print(f"Started frida for com.sec.imsservice (Samsung) (PID: {proc2.pid})")
         except Exception as e:
             print(f"Error starting Samsung useragent script: {e}")
             return False
-    
+
+        # NEW: wait for ready markers (2s timeout each)
+        ok1, out1 = wait_for_marker(proc1, "FRIDA_READY:s21_void_gsm_dial", timeout_s=2.0)
+        ok2, out2 = wait_for_marker(proc2, "FRIDA_READY:s21_void_useragent", timeout_s=2.0)
+
+        if not (ok1 and ok2):
+            print("Frida ready timeout or failure (Samsung).")
+            print("proc1 tail:\n", out1)
+            print("proc2 tail:\n", out2)
+            return False
+
     return True
 
 
@@ -154,11 +217,11 @@ def find_usb_port(modem_type):
     TODO: Better way?
     """
     vendor_id = USB_VENDOR_IDS.get(modem_type, "05c6")  # Default to Qualcomm
-    
+
     try:
         result = subprocess.run(['lsusb'], capture_output=True, text=True)
         lines = result.stdout.strip().split('\n')
-        
+
         for line in lines:
             if vendor_id in line.lower():
                 # Parse: "Bus 003 Device 013: ID 05c6:9091 Qualcomm, Inc. ..."
@@ -169,7 +232,7 @@ def find_usb_port(modem_type):
                     port = f"{bus}:{device}"
                     print(f"Found USB device for {modem_type}: {port}")
                     return port
-        
+
         print(f"No USB device found for modem type: {modem_type} (vendor: {vendor_id})")
         return None
     except Exception as e:
@@ -184,42 +247,42 @@ def start_scat(modem_type, filename):
     Command for sec (Pixel): sudo scat -t sec -u -a <port> -i 0 --start-magic 0x34dc12fe -F <filename>
     """
     global scat_process
-    
+
     # IMPORTANT: Force kill any existing scat processes first
     print("Force killing any existing scat processes...")
     stop_scat_process()
     time.sleep(2)  # Wait longer for USB resource cleanup
-    
+
     # Double check - pkill any orphan scat
     subprocess.run(['sudo', 'pkill', '-9', 'scat'], capture_output=True)
     time.sleep(1)  # Wait for OS to release USB
-    
+
     # Find USB port
     usb_port = find_usb_port(modem_type)
     if not usb_port:
         print("ERROR: USB port not found!")
         return False, "USB port not found"
-    
+
     # Ensure output directory exists
     os.makedirs(SCAT_OUTPUT_DIR, exist_ok=True)
-    
+
     # Build full path for output file
     output_file = os.path.join(SCAT_OUTPUT_DIR, filename)
-    
+
     # Check if file already exists (shouldn't happen, but just in case)
     if os.path.exists(output_file):
         print(f"WARNING: File already exists: {output_file}")
-    
+
     # Build scat command based on modem type
     # For sec (Pixel/Exynos): add --start-magic flag
     if modem_type == "sec":
-        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-a', usb_port, '-i', '0', 
+        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-L', 'ip,nas,rrc,pdcp,rlc,mac', '-a', usb_port, '-i', '0',
                '--start-magic', '0x34dc12fe', '-F', output_file]
     else:
-        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-a', usb_port, '-i', '0', '-F', output_file]
-    
+        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-L', 'ip,nas,rrc,pdcp,rlc,mac', '-a', usb_port, '-i', '0', '-F', output_file]
+
     print(f"Starting scat: {' '.join(cmd)}")
-    
+
     try:
         scat_process = subprocess.Popen(
             cmd,
@@ -227,19 +290,19 @@ def start_scat(modem_type, filename):
             stderr=subprocess.PIPE
         )
         print(f"scat started (PID: {scat_process.pid})")
-        
+
         # Wait a moment to check if process started successfully
-        time.sleep(0.5)
+        time.sleep(1.0)
         if scat_process.poll() is not None:
             # Process already terminated - something went wrong
             stderr = scat_process.stderr.read().decode() if scat_process.stderr else ""
             print(f"ERROR: scat terminated immediately! stderr: {stderr}")
             return False, f"scat failed to start: {stderr}"
-        
+
         # Wait additional time for scat to stabilize and start capturing
         print("Waiting for scat to stabilize...")
         time.sleep(2)  # Give scat time to actually start recording
-        
+
         print(f"scat running and ready (PID: {scat_process.pid})")
         return True, f"scat started, output: {output_file}"
     except Exception as e:
@@ -253,21 +316,21 @@ def stop_scat_process():
     Uses sudo kill to ensure signal reaches scat even through sudo wrapper
     """
     global scat_process
-    
+
     if scat_process is not None:
         pid = scat_process.pid
         print(f"Stopping scat (PID: {pid})...")
-        
+
         try:
             # Method 1: Use sudo pkill to send SIGINT to scat directly (most reliable)
             # This bypasses the sudo wrapper issue
             print("Sending SIGINT via sudo pkill...")
             subprocess.run(['sudo', 'pkill', '-INT', '-f', 'scat'], capture_output=True, timeout=3)
-            
+
             # Wait for our process to finish
             scat_process.wait(timeout=8)  # Give more time for file flush
             print(f"scat stopped gracefully (PID: {pid})")
-            
+
         except subprocess.TimeoutExpired:
             print(f"scat timeout after SIGINT, sending SIGTERM...")
             try:
@@ -284,7 +347,7 @@ def stop_scat_process():
                 except:
                     pass
                 print("scat killed (force)")
-                
+
         except Exception as e:
             print(f"Error stopping scat: {e}")
         finally:
@@ -297,31 +360,25 @@ def stop_scat_process():
 
 @app.route('/start-frida', methods=['POST'])
 def start_frida():
-    """
-    Start Frida scripts.
-    Expected JSON body: { "device_type": "samsung" } or { "device_type": "pixel" }
-    If no body, defaults to "samsung"
-    """
     print("\n=== Received: /start-frida ===")
-    
+
     data = request.get_json() or {}
-    device_type = data.get('device_type', 'samsung')  # Default to Samsung
-    
+    device_type = data.get('device_type', 'samsung')
     print(f"Device type: {device_type}")
-    
+
     success = start_frida_scripts(device_type)
-    return jsonify({
-        "status": "ok" if success else "error",
-        "message": f"Frida scripts started for {device_type}" if success else "Failed to start"
-    })
+    if success:
+        return jsonify({"status": "ok", "message": f"Frida scripts started for {device_type}"}), 200
+    else:
+        return jsonify({"status": "error", "message": "Failed to start frida scripts"}), 500
 
 
 @app.route('/pkill-phone', methods=['POST'])
 def pkill_phone():
     print("\n=== Received: /pkill-phone ===")
-    
+
     kill_frida_processes()
-    
+
     # pkill com.android.phone
     print("Sending pkill command...")
     result = subprocess.run(
@@ -330,7 +387,7 @@ def pkill_phone():
         text=True
     )
     print(f"pkill result: {result.returncode}")
-    
+
     return jsonify({
         "status": "ok",
         "message": "Phone app killed"
@@ -339,37 +396,31 @@ def pkill_phone():
 
 @app.route('/start-scat', methods=['POST'])
 def start_scat_endpoint():
-    """
-    Start scat recording.
-    Expected JSON body: { "modem_type": "qc", "filename": "test.pcap" }
-    """
     print("\n=== Received: /start-scat ===")
-    
+
     data = request.get_json() or {}
-    modem_type = data.get('modem_type', 'qc')  # Default to Qualcomm
+    modem_type = data.get('modem_type', 'qc')
     filename = data.get('filename', 'capture.pcap')
-    
-    # Ensure filename ends with .pcap
+
     if not filename.endswith('.pcap'):
         filename = filename.rsplit('.', 1)[0] + '.pcap'
-    
+
     print(f"modem_type: {modem_type}, filename: {filename}")
-    
+
     success, message = start_scat(modem_type, filename)
-    
-    return jsonify({
-        "status": "ok" if success else "error",
-        "message": message
-    })
+    if success:
+        return jsonify({"status": "ok", "message": message}), 200
+    else:
+        return jsonify({"status": "error", "message": message}), 500
 
 
 @app.route('/stop-scat', methods=['POST'])
 def stop_scat_endpoint():
     """Stop scat recording."""
     print("\n=== Received: /stop-scat ===")
-    
+
     stop_scat_process()
-    
+
     return jsonify({
         "status": "ok",
         "message": "scat stopped"
@@ -392,5 +443,5 @@ if __name__ == '__main__':
     print("")
     print("Remember to run: adb reverse tcp:5555 tcp:5555")
     print("=" * 50)
-    
+
     app.run(host='0.0.0.0', port=5555, debug=False, threaded=True)
