@@ -1,6 +1,15 @@
 Java.perform(function() {
     console.log("[*] Searching for CommandsInterface implementation via ClassLoaders...");
     
+    function reportReady(id) {
+        console.log("FRIDA_READY:" + id);
+    }
+
+    function reportError(id, e) {
+        var msg = (e && e.stack) ? e.stack : ("" + e);
+        console.log("FRIDA_ERROR:" + id + ":" + msg);
+    }
+    
     var foundImplementation = false;
     
     Java.enumerateClassLoaders({
@@ -41,8 +50,10 @@ Java.perform(function() {
         onComplete: function() {
             if (!foundImplementation) {
                 console.log("[-] No CommandsInterface implementation found");
+                reportError("s25_void_gsm_dial", "CommandsInterface implementation not found");
             } else {
                 console.log("[+] Successfully hooked CommandsInterface implementations");
+                reportReady("s25_void_gsm_dial");
             }
         }
     });

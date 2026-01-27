@@ -14,7 +14,14 @@ Java.perform(function() {
         var milliseconds = String(now.getMilliseconds()).padStart(3, '0');
         return month + "-" + day + " " + hours + ":" + minutes + ":" + seconds + "." + milliseconds;
     }
+    function reportReady(id) {
+        console.log("FRIDA_READY:" + id);
+    }
 
+    function reportError(id, e) {
+        var msg = (e && e.stack) ? e.stack : ("" + e);
+        console.log("FRIDA_ERROR:" + id + ":" + msg);
+    }
     // Helper function to output debug log to logcat
     function logDebug(message) {
         Log.d(TAG, message);
@@ -71,6 +78,7 @@ Java.perform(function() {
             if (!foundImplementation) {
                 console.log("[-] No CommandsInterface implementation found");
                 logDebug("No CommandsInterface implementation found");
+                reportError("pixel9_void_gsm_dial", "No CommandsInterface implementation found");
                 
                 // Clear the alive interval if no implementation found
                 if (aliveInterval) {
@@ -79,6 +87,7 @@ Java.perform(function() {
             } else {
                 console.log("[+] Successfully hooked CommandsInterface implementations");
                 logDebug("Successfully hooked CommandsInterface implementations - ready to block CS calls");
+                reportReady("pixel9_void_gsm_dial");
             }
         }
     });
