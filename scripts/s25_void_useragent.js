@@ -1,6 +1,14 @@
 Java.perform(function() {
     console.log("[*] Starting Frida script to hook UserAgent.makeCall()...");
-    
+    function reportReady(id) {
+        console.log("FRIDA_READY:" + id);
+    }
+
+    function reportError(id, e) {
+        var msg = (e && e.stack) ? e.stack : ("" + e);
+        console.log("FRIDA_ERROR:" + id + ":" + msg);
+    }
+
     try {
         // Get the UserAgent class
         var UserAgent = Java.use("com.sec.internal.ims.core.handler.secims.UserAgent");
@@ -51,9 +59,11 @@ Java.perform(function() {
         
         console.log("[+] Successfully hooked UserAgent.makeCall()");
         console.log("[+] Calls will be blocked at UserAgent level");
+        reportReady("s25_void_useragent");
         
     } catch(e) {
         console.log("[-] Failed to hook UserAgent.makeCall(): " + e);
         console.log("[-] Error details: " + e.stack);
+        reportError("s25_void_useragent", e);
     }
 });

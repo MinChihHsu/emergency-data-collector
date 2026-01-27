@@ -45,3 +45,4 @@ Thumbs.db
 
 # Kotlin
 *.kotlin_module
+scat_output/
