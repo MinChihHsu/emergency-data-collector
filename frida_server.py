@@ -21,7 +21,12 @@ import re
 
 app = Flask(__name__)
 
+###  ---- USER SET VARIABLES ----
+# Directory of where frida scripts are located. 
 SCRIPT_DIR = "/Users/minchihhsu/Downloads/app"
+# Output directory for scat pcap files
+SCAT_OUTPUT_DIR = "/Users/minchihhsu/Downloads/scat_output"
+
 
 # Samsung S21 Frida scripts
 S21_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_gsm_dial.js")
@@ -31,8 +36,7 @@ S21_USERAGENT_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_useragent.js")
 PIXEL_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_gsm_dial.js")
 PIXEL_CALLSESSION_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_callsessionadaptor.js")
 
-# Output directory for scat pcap files
-SCAT_OUTPUT_DIR = "/Users/minchihhsu/Downloads/scat_output"
+
 
 # USB Vendor IDs for different modem types
 USB_VENDOR_IDS = {
