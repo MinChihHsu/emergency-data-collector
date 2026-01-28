@@ -373,6 +373,61 @@ def start_frida():
         return jsonify({"status": "error", "message": "Failed to start frida scripts"}), 500
 
 
+@app.route('/wait-for-block', methods=['POST'])
+def wait_for_block():
+    """
+    Wait for any Frida blocker script to report a blocked call.
+    Returns as soon as "BLOCKED:" is seen in any Frida process output.
+    Timeout: 30 seconds (configurable via JSON body)
+    """
+    print("\n=== Received: /wait-for-block ===")
+    
+    data = request.get_json() or {}
+    timeout_s = data.get('timeout', 30.0)  # Default 30 seconds
+    
+    if not frida_processes:
+        print("No Frida processes running")
+        return jsonify({"status": "error", "message": "No Frida processes running", "blocked": False}), 500
+    
+    end_time = time.monotonic() + timeout_s
+    print(f"Waiting for BLOCKED marker (timeout: {timeout_s}s)...")
+    
+    while time.monotonic() < end_time:
+        for proc in frida_processes:
+            if proc.stdout is None:
+                continue
+            if proc.poll() is not None:
+                continue  # Process dead
+            
+            # Non-blocking read with short timeout
+            rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+            if rlist:
+                try:
+                    line = proc.stdout.readline()
+                    if line:
+                        line = line.rstrip()
+                        # Check for BLOCKED marker
+                        if "BLOCKED:" in line:
+                            print(f"*** CALL BLOCKED: {line}")
+                            return jsonify({
+                                "status": "ok",
+                                "message": "Call blocked by Frida",
+                                "blocked": True,
+                                "detail": line
+                            }), 200
+                except:
+                    pass
+        
+        time.sleep(0.05)  # Small sleep to prevent CPU spin
+    
+    print("Timeout waiting for BLOCKED marker")
+    return jsonify({
+        "status": "timeout",
+        "message": f"No block detected within {timeout_s}s",
+        "blocked": False
+    }), 200
+
+
 @app.route('/pkill-phone', methods=['POST'])
 def pkill_phone():
     print("\n=== Received: /pkill-phone ===")

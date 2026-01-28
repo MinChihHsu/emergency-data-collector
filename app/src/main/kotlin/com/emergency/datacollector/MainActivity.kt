@@ -22,6 +22,7 @@ import android.telephony.CellInfoNr
 import android.telephony.CellInfoWcdma
 import android.telephony.CellInfoGsm
 import android.telephony.TelephonyManager
+import android.util.Log
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -219,8 +220,10 @@ class MainActivity : AppCompatActivity() {
     
     override fun onResume() {
         super.onResume()
-        // Ensure SIM is enabled when app resumes
-        ensureSimEnabled()
+        // Ensure SIM is enabled when app resumes, but NOT during measurement
+        if (!isCollectionRunning) {
+            ensureSimEnabled()
+        }
     }
     
     private fun ensureSimEnabled() {
@@ -629,91 +632,98 @@ class MainActivity : AppCompatActivity() {
             handler.postDelayed({
                 if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
 
-                // Step 4: Make the call
+                // Make the call
                 appendLog("Dialing...")
                 makeCall()
 
-                // Step 5: Wait for call duration, then hang up using tapScreen
-                handler.postDelayed({
-                    if (shouldStop) { endCall(); finishCollection("Stopped by user"); return@postDelayed }
-
-                    appendLog("Ending call via tap...")
-                    tapScreen(endCallButtonX, endCallButtonY)
-
-                    // Step 6: Wait after hangup, then stop SCAT first
+                // Wait for blocker to intercept, then hang up immediately
+                appendLog("Waiting for call to be blocked...")
+                val waitBlockBody = """{"timeout": 30}"""
+                sendFridaCommand("/wait-for-block", waitBlockBody) { blocked ->
+                    if (blocked) {
+                        appendLog("Call blocked! Waiting 2s for UI...")
+                        Log.d("DataCollector", "=== CALL_BLOCKED: Waiting 2s before hangup ===" )
+                    } else {
+                        appendLog("Block timeout, hanging up anyway...")
+                        Log.d("DataCollector", "=== BLOCK_TIMEOUT: Hanging up anyway ===")
+                    }
+                    
+                    // Wait 2 seconds for UI to react, then hang up via tap
                     handler.postDelayed({
-                        if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
-
-                        // Function to proceed to kill phone app
-                        val proceedToKillPhone: () -> Unit = {
-                            // Step 7: Kill phone app
-                            handler.postDelayed({
-                                appendLog("Killing phone app...")
-                                sendFridaCommand("/pkill-phone") { _ ->
-                                    // Wait 500ms then send second pkill
-                                    handler.postDelayed({
-                                        sendFridaCommand("/pkill-phone") { _ ->
-                                            appendLog("Phone app killed")
-
-                                            // Step 8: Capture logcat and save (multiple buffers)
-                                            handler.postDelayed({
-                                                if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
-
-                                                appendLog("Capturing logcat (multiple buffers)...")
-
-                                                // Generate base filename (without .txt extension)
-                                                val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
-
-                                                // Save each logcat buffer to separate file
-                                                saveLogcatMultiBuffer(baseFileName2)
-
-                                                appendLog("Saved: ${baseFileName2}_*.txt")
-
-                                                // Step 9: Next measurement or next scenario
-                                                handler.postDelayed({
-                                                    if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
-
-                                                    if (currentMeasurementCount < totalMeasurementsPerPhase) {
-                                                        performMeasurement()
-                                                    } else {
-                                                        appendLog("Scenario $currentPhase Complete!")
-                                                        val nextPhase = getNextEnabledPhase(currentPhase)
-                                                        if (nextPhase != null) {
-                                                            when (nextPhase) {
-                                                                1 -> startPhase1Measurements()
-                                                                2 -> startPhase2()
-                                                                3 -> startPhase3()
-                                                                4 -> startPhase4()
-                                                            }
-                                                        } else {
-                                                            finishCollection("All measurements complete!")
-                                                        }
-                                                    }
-                                                }, delayBetweenCalls)
-                                            }, 1000)  // Brief wait after kill
-                                        }
-                                    }, 500)  // Delay between pkills
-                                }
-                            }, 1000)  // Wait 1s before pkill
-                        }
-
-                        // Step 6.5: Stop SCAT and WAIT for response before killing phone
-                        if (enableScat) {
-                            appendLog("Stopping SCAT recording...")
-                            sendScatCommand("/stop-scat", null) { scatStopSuccess ->
-                                if (scatStopSuccess) {
-                                    appendLog("SCAT stopped successfully")
-                                } else {
-                                    appendLog("Warning: SCAT stop failed")
-                                }
-                                // WAIT for scat callback to return, then proceed
-                                proceedToKillPhone()
+                        appendLog("Ending call via tap...")
+                        tapScreen(endCallButtonX, endCallButtonY)
+                        
+                        // Immediately kill phone app to prevent auto-redial
+                        handler.postDelayed({
+                            sendFridaCommand("/pkill-phone") { _ ->
+                                appendLog("Quick pkill sent to prevent redial")
                             }
-                        } else {
-                            proceedToKillPhone()
-                        }
-                    }, delayAfterHangup)
-                }, delayCallDuration)
+                        }, 500)  // 500ms after tap
+
+                        // Wait after hangup, then stop SCAT and capture logcat BEFORE killing phone
+                        handler.postDelayed({
+                            if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+
+                            // Function to proceed after capturing logs
+                            val proceedToNext: () -> Unit = {
+                                // Kill phone app (final cleanup)
+                                appendLog("Killing phone app (final)...")
+                                sendFridaCommand("/pkill-phone") { _ ->
+                                    sendFridaCommand("/pkill-phone") { _ ->
+                                        appendLog("Phone app killed")
+                                        
+                                        // Next measurement or next scenario
+                                        handler.postDelayed({
+                                            if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                            if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                performMeasurement()
+                                            } else {
+                                                appendLog("Scenario $currentPhase Complete!")
+                                                val nextPhase = getNextEnabledPhase(currentPhase)
+                                                if (nextPhase != null) {
+                                                    when (nextPhase) {
+                                                        1 -> startPhase1Measurements()
+                                                        2 -> startPhase2()
+                                                        3 -> startPhase3()
+                                                        4 -> startPhase4()
+                                                    }
+                                                } else {
+                                                    finishCollection("All measurements complete!")
+                                                }
+                                            }
+                                        }, delayBetweenCalls)
+                                    }
+                                }
+                            }
+
+                            // Function to capture logcat
+                            val captureLogcat: () -> Unit = {
+                                appendLog("Capturing logcat (multiple buffers)...")
+                                val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
+                                saveLogcatMultiBuffer(baseFileName2)
+                                appendLog("Saved: ${baseFileName2}_*.txt")
+                                proceedToNext()
+                            }
+
+                            // Stop SCAT first, then capture logcat, then kill phone
+                            if (enableScat) {
+                                appendLog("Stopping SCAT recording...")
+                                sendScatCommand("/stop-scat", null) { scatStopSuccess ->
+                                    if (scatStopSuccess) {
+                                        appendLog("SCAT stopped successfully")
+                                    } else {
+                                        appendLog("Warning: SCAT stop failed")
+                                    }
+                                    // After SCAT stops, capture logcat
+                                    captureLogcat()
+                                }
+                            } else {
+                                captureLogcat()
+                            }
+                        }, delayAfterHangup)
+                    }, 2000)  // Wait 2 seconds for UI to react
+                }
             }, delayFridaReady)
         }
 
@@ -994,10 +1004,6 @@ class MainActivity : AppCompatActivity() {
         checkLogcat()
     }
 
-
-
-
-
     private fun stopCollection() {
         shouldStop = true
         appendLog("Stopping collection...")
@@ -1195,6 +1201,9 @@ class MainActivity : AppCompatActivity() {
         }
         appendLog("Attempting to call: $numberToCall (Scenario $currentPhase)")
         
+        // Write to logcat for timing analysis
+        Log.d("DataCollector", "=== START_DIALING: $numberToCall (Scenario $currentPhase) ===")
+        
         try {
             // if it's emergency number, need to use CALL_EMERGENCY
             val isEmergency = numberToCall in listOf("911", "110", "112", "119", "999")
@@ -1267,28 +1276,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun endCall() {
-        appendLog("Ending call via tap...")
-        try {
-            // use tapScreen
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "input tap $endCallButtonX $endCallButtonY"))
-            val exitCode = process.waitFor()
-            
-            if (exitCode == 0) {
-                appendLog("End call tap sent at ($endCallButtonX, $endCallButtonY)")
-            } else {
-                appendLog("Tap failed (exit: $exitCode), trying keyevent...")
-                // Fallback to keyevent
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent ENDCALL")).waitFor()
-            }
-        } catch (e: Exception) {
-            appendLog("End call error: ${e.message}")
-        }
-    }
-    
-    // ===== Cellular Pro (removed - will use scat) =====
-    // TODO: scat
-    
     // ===== File Operations =====
     // {country_operator_modelName_deviceID_date_scenario#_experiment#_time_location}.{txt/pcap}
     private fun generateFileName(scenarioNum: String): String {
@@ -1314,15 +1301,18 @@ class MainActivity : AppCompatActivity() {
     }
     
     // ===== Logcat Collection =====
-    // TODO: just radio for now, crash when using -b all
     private fun clearLogcat() {
         try {
-            // Clear all buffers that we capture
+            // Increase buffer size and clear all buffers that we capture
+            // Using su -c because some devices require root for these operations
             val buffers = listOf("radio", "events", "main", "system")
             for (buffer in buffers) {
-                Runtime.getRuntime().exec(arrayOf("logcat", "-b", buffer, "-c")).waitFor()
+                // Increase buffer size to 16MB to avoid log rotation (needs root on some devices)
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -G 16M -b $buffer")).waitFor()
+                // Clear the buffer
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -b $buffer -c")).waitFor()
             }
-            appendLog("Logcat cleared (radio, events, main, system)")
+            appendLog("Logcat cleared and buffer size increased to 16MB")
         } catch (e: Exception) {
             appendLog("Clear logcat error: ${e.message}")
         }
