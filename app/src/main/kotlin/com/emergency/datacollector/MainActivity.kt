@@ -620,6 +620,8 @@ class MainActivity : AppCompatActivity() {
         // Step 1: Clear logcat buffer
         clearLogcat()
 
+        val measurementStartTimeStr = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+
         // ---- Gate config (Frida + SCAT must return HTTP 200 before we proceed) ----
         val fridaEndpoint = if (currentPhase == 4) "/start-frida-satellite" else "/start-frida"
         val deviceTypeBody = """{"device_type": "${getDeviceType()}"}"""
@@ -638,6 +640,8 @@ class MainActivity : AppCompatActivity() {
 
                 // Wait for blocker to intercept, then hang up immediately
                 appendLog("Waiting for call to be blocked...")
+
+                // TODO: Timeout should be 5 minutes. Change when the app is ready.
                 val waitBlockBody = """{"timeout": 30}"""
                 sendFridaCommand("/wait-for-block", waitBlockBody) { blocked ->
                     if (blocked) {
@@ -701,7 +705,7 @@ class MainActivity : AppCompatActivity() {
                             val captureLogcat: () -> Unit = {
                                 appendLog("Capturing logcat (multiple buffers)...")
                                 val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
-                                saveLogcatMultiBuffer(baseFileName2)
+                                saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
                                 appendLog("Saved: ${baseFileName2}_*.txt")
                                 proceedToNext()
                             }
@@ -736,7 +740,8 @@ class MainActivity : AppCompatActivity() {
 
                 try {
                     // Launch Satellite SOS app
-                    val cmd = "am start -n com.google.android.apps.stargate/.questionnaire.QuestionnaireHomeActivity -a com.google.android.apps.stargate.ACTION_ESOS_QUESTIONNAIRE"
+                    val cmd =
+                        "am start -n com.google.android.apps.stargate/.questionnaire.QuestionnaireHomeActivity -a com.google.android.apps.stargate.ACTION_ESOS_QUESTIONNAIRE"
                     val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                     val exitCode = process.waitFor()
 
@@ -756,89 +761,178 @@ class MainActivity : AppCompatActivity() {
                             appendLog("Tapping second button (540, 1752)...")
                             tapScreen(540, 1752)
 
-                            // Monitor satellite connection
-                            appendLog("Monitoring satellite connection...")
-                            monitorSatelliteConnected { connected ->
-                                if (connected) {
-                                    appendLog("Satellite connected! Proceeding...")
+                            // ✅ Phase 4 change: start SCAT AFTER 2nd tap (with retry gate), then monitor
+                            fun startScatUntilOkThenMonitor() {
+                                if (shouldStop) { finishCollection("Stopped by user"); return }
 
-                                    // Step 5: Wait after hangup, then stop SCAT first
-                                    handler.postDelayed({
-                                        if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                // If SCAT disabled, just monitor as before
+                                if (!enableScat) {
+                                    appendLog("Monitoring satellite connection...")
+                                    monitorSatelliteConnected { connected ->
+                                        if (connected) {
+                                            appendLog("Satellite connected! Proceeding...")
 
-                                        // Function to proceed to kill phone app
-                                        val proceedToKillPhone: () -> Unit = {
-                                            // Step 7: Kill phone app
+                                            // Step 5: Wait after hangup, then stop SCAT first
                                             handler.postDelayed({
-                                                appendLog("Killing phone app...")
-                                                sendFridaCommand("/pkill-phone") { _ ->
-                                                    // Wait 500ms then send second pkill
+                                                if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                                // Function to proceed to kill phone app
+                                                val proceedToKillPhone: () -> Unit = {
+                                                    // Step 7: Kill phone app
                                                     handler.postDelayed({
+                                                        appendLog("Killing phone app...")
                                                         sendFridaCommand("/pkill-phone") { _ ->
-                                                            appendLog("Phone app killed")
-
-                                                            // Step 8: Capture logcat and save (multiple buffers)
+                                                            // Wait 500ms then send second pkill
                                                             handler.postDelayed({
-                                                                if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                                                sendFridaCommand("/pkill-phone") { _ ->
+                                                                    appendLog("Phone app killed")
 
-                                                                appendLog("Capturing logcat (multiple buffers)...")
+                                                                    // Step 8: Capture logcat and save (multiple buffers)
+                                                                    handler.postDelayed({
+                                                                        if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
 
-                                                                // Generate base filename (without .txt extension)
-                                                                val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
+                                                                        appendLog("Capturing logcat (multiple buffers)...")
 
-                                                                // Save each logcat buffer to separate file
-                                                                saveLogcatMultiBuffer(baseFileName2)
+                                                                        // Generate base filename (without .txt extension)
+                                                                        val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
 
-                                                                appendLog("Saved: ${baseFileName2}_*.txt")
+                                                                        // Save each logcat buffer to separate file
+                                                                        saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
 
-                                                                // Next measurement or next scenario
-                                                                handler.postDelayed({
-                                                                    if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+                                                                        appendLog("Saved: ${baseFileName2}_*.txt")
 
-                                                                    if (currentMeasurementCount < totalMeasurementsPerPhase) {
-                                                                        performMeasurement()
-                                                                    } else {
-                                                                        appendLog("Scenario $currentPhase Complete!")
-                                                                        val nextPhase = getNextEnabledPhase(currentPhase)
-                                                                        if (nextPhase != null) {
-                                                                            when (nextPhase) {
-                                                                                1 -> startPhase1Measurements()
-                                                                                2 -> startPhase2()
-                                                                                3 -> startPhase3()
-                                                                                4 -> startPhase4()
+                                                                        // Next measurement or next scenario
+                                                                        handler.postDelayed({
+                                                                            if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                                                            if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                                                performMeasurement()
+                                                                            } else {
+                                                                                appendLog("Scenario $currentPhase Complete!")
+                                                                                val nextPhase = getNextEnabledPhase(currentPhase)
+                                                                                if (nextPhase != null) {
+                                                                                    when (nextPhase) {
+                                                                                        1 -> startPhase1Measurements()
+                                                                                        2 -> startPhase2()
+                                                                                        3 -> startPhase3()
+                                                                                        4 -> startPhase4()
+                                                                                    }
+                                                                                } else {
+                                                                                    finishCollection("All measurements complete!")
+                                                                                }
                                                                             }
-                                                                        } else {
-                                                                            finishCollection("All measurements complete!")
-                                                                        }
-                                                                    }
-                                                                }, delayBetweenCalls)
-                                                            }, 1000)  // Brief wait after kill
+                                                                        }, delayBetweenCalls)
+                                                                    }, 1000)  // Brief wait after kill
+                                                                }
+                                                            }, 500)  // Delay between pkills
                                                         }
-                                                    }, 500)  // Delay between pkills
+                                                    }, 1000)  // Wait 1s before pkill
                                                 }
-                                            }, 1000)  // Wait 1s before pkill
-                                        }
 
-                                        // Stop SCAT and WAIT for response before killing phone
-                                        if (enableScat) {
-                                            appendLog("Stopping SCAT recording...")
-                                            sendScatCommand("/stop-scat", null) { scatStopSuccess ->
-                                                if (scatStopSuccess) {
-                                                    appendLog("SCAT stopped successfully")
-                                                } else {
-                                                    appendLog("Warning: SCAT stop failed")
-                                                }
+                                                // Stop SCAT and WAIT for response before killing phone
+                                                // (SCAT disabled here, so just proceed)
                                                 proceedToKillPhone()
-                                            }
+                                            }, delayAfterHangup)
                                         } else {
-                                            proceedToKillPhone()
+                                            appendLog("Satellite connection failed or timeout")
+                                            finishCollection("Satellite connection failed")
                                         }
-                                    }, delayAfterHangup)
-                                } else {
-                                    appendLog("Satellite connection failed or timeout")
-                                    finishCollection("Satellite connection failed")
+                                    }
+                                    return
+                                }
+
+                                appendLog("Starting SCAT recording (Phase 4 after tap)...")
+                                sendScatCommand("/start-scat", scatBody) { scatOk ->
+                                    if (scatOk) {
+                                        appendLog("SCAT started successfully: $pcapFileName")
+
+                                        // Monitor satellite connection
+                                        appendLog("Monitoring satellite connection...")
+                                        monitorSatelliteConnected { connected ->
+                                            if (connected) {
+                                                appendLog("Satellite connected! Proceeding...")
+
+                                                // Step 5: Wait after hangup, then stop SCAT first
+                                                handler.postDelayed({
+                                                    if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                                    // Function to proceed to kill phone app
+                                                    val proceedToKillPhone: () -> Unit = {
+                                                        // Step 7: Kill phone app
+                                                        handler.postDelayed({
+                                                            appendLog("Killing phone app...")
+                                                            sendFridaCommand("/pkill-phone") { _ ->
+                                                                // Wait 500ms then send second pkill
+                                                                handler.postDelayed({
+                                                                    sendFridaCommand("/pkill-phone") { _ ->
+                                                                        appendLog("Phone app killed")
+
+                                                                        // Step 8: Capture logcat and save (multiple buffers)
+                                                                        handler.postDelayed({
+                                                                            if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                                                            appendLog("Capturing logcat (multiple buffers)...")
+
+                                                                            // Generate base filename (without .txt extension)
+                                                                            val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
+
+                                                                            // Save each logcat buffer to separate file
+                                                                            saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
+
+                                                                            appendLog("Saved: ${baseFileName2}_*.txt")
+
+                                                                            // Next measurement or next scenario
+                                                                            handler.postDelayed({
+                                                                                if (shouldStop) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                                                                if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                                                    performMeasurement()
+                                                                                } else {
+                                                                                    appendLog("Scenario $currentPhase Complete!")
+                                                                                    val nextPhase = getNextEnabledPhase(currentPhase)
+                                                                                    if (nextPhase != null) {
+                                                                                        when (nextPhase) {
+                                                                                            1 -> startPhase1Measurements()
+                                                                                            2 -> startPhase2()
+                                                                                            3 -> startPhase3()
+                                                                                            4 -> startPhase4()
+                                                                                        }
+                                                                                    } else {
+                                                                                        finishCollection("All measurements complete!")
+                                                                                    }
+                                                                                }
+                                                                            }, delayBetweenCalls)
+                                                                        }, 1000)  // Brief wait after kill
+                                                                    }
+                                                                }, 500)  // Delay between pkills
+                                                            }
+                                                        }, 1000)  // Wait 1s before pkill
+                                                    }
+
+                                                    // Stop SCAT and WAIT for response before killing phone
+                                                    appendLog("Stopping SCAT recording...")
+                                                    sendScatCommand("/stop-scat", null) { scatStopSuccess ->
+                                                        if (scatStopSuccess) {
+                                                            appendLog("SCAT stopped successfully")
+                                                        } else {
+                                                            appendLog("Warning: SCAT stop failed")
+                                                        }
+                                                        proceedToKillPhone()
+                                                    }
+                                                }, delayAfterHangup)
+                                            } else {
+                                                appendLog("Satellite connection failed or timeout")
+                                                finishCollection("Satellite connection failed")
+                                            }
+                                        }
+                                    } else {
+                                        appendLog("SCAT start not ready (no HTTP 200). Retrying in ${retryDelayMs}ms...")
+                                        handler.postDelayed({ startScatUntilOkThenMonitor() }, retryDelayMs)
+                                    }
                                 }
                             }
+
+                            startScatUntilOkThenMonitor()
                         }, 2000)  // Wait 2 seconds after first tap
                     }, 2000)  // Wait 2 seconds for app to open
 
@@ -848,6 +942,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }, delayFridaReady)
         }
+
 
         // ---- Gate logic: retry until HTTP 200 ----
         fun startScatUntilOkThenProceed() {
@@ -877,13 +972,20 @@ class MainActivity : AppCompatActivity() {
             sendFridaCommand(fridaEndpoint, deviceTypeBody) { fridaOk ->
                 if (fridaOk) {
                     appendLog("Frida blocker started")
-                    startScatUntilOkThenProceed()
+
+                    // ✅ Phase 4: DON'T start SCAT here. Start it after the 2nd tap.
+                    if (currentPhase == 4) {
+                        proceedToSatellite()
+                    } else {
+                        startScatUntilOkThenProceed()
+                    }
                 } else {
                     appendLog("Frida start not ready (no HTTP 200). Retrying in ${retryDelayMs}ms...")
                     handler.postDelayed({ startFridaUntilOkThenStartScat() }, retryDelayMs)
                 }
             }
         }
+
 
         // Step 2: Start Frida blocker (must be before SCAT) - now enforced
         startFridaUntilOkThenStartScat()
@@ -924,17 +1026,24 @@ class MainActivity : AppCompatActivity() {
                 appendLog("Force-stop error: ${e.message}")
             }
 
-            // Wait 1 minute before returning true
-            appendLog("Waiting 1 minute before proceeding...")
+            val waitMs = if (shouldStop) 0L else 60000L
+            if (!shouldStop) appendLog("Waiting 1 minute before proceeding...")
             handler.postDelayed({
                 appendLog("Satellite connection monitoring complete")
-                callback(true)
-            }, 60000L)  // 1 minute = 60000ms
+                callback(foundKeyword)
+            }, waitMs)
+
         }
 
         // Function to check logcat periodically
         fun checkLogcat() {
             if (!isMonitoring) return
+
+            if (shouldStop) {
+                appendLog("Stop requested. Aborting satellite monitoring...")
+                stopMonitoring(false)
+                return
+            }
 
             // Check if timeout reached
             val elapsedTime = System.currentTimeMillis() - startTime
@@ -951,11 +1060,14 @@ class MainActivity : AppCompatActivity() {
                     // Use -e (regex) to filter for our patterns
                     // This is much more efficient and won't miss logs
                     val cmd = "logcat -T '$lastCheckTime' -d -e 'SATELLITE_MODEM_STATE_CONNECTED|Entering ConnectedState'"
+                    appendLog("Logcat poll... lastCheckTime=$lastCheckTime")
                     val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
                     val reader = process.inputStream.bufferedReader()
                     val logcatOutput = reader.readText()
                     reader.close()
                     process.waitFor()
+                    appendLog("Logcat poll done, len=${logcatOutput.length}")
+
 
                     // Update last check time for next iteration
                     lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
@@ -1201,8 +1313,7 @@ class MainActivity : AppCompatActivity() {
         }
         appendLog("Attempting to call: $numberToCall (Scenario $currentPhase)")
         
-        // Write to logcat for timing analysis
-        Log.d("DataCollector", "=== START_DIALING: $numberToCall (Scenario $currentPhase) ===")
+        
         
         try {
             // if it's emergency number, need to use CALL_EMERGENCY
@@ -1210,45 +1321,84 @@ class MainActivity : AppCompatActivity() {
             
             if (isEmergency) {
                 appendLog("Using emergency call method...")
-                
                 // use CALL_EMERGENCY
                 val cmd = "am start -a android.intent.action.CALL_EMERGENCY -d tel:$numberToCall"
-                appendLog("Running: su -c '$cmd'")
                 
+                // Write to logcat for timing analysis
+                Log.d("DataCollector", "=== START_DIALING: $numberToCall (Scenario $currentPhase) ===")
+
                 val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 val exitCode = process.waitFor()
                 val errorOutput = process.errorStream.bufferedReader().readText()
-                
+                appendLog("Running: su -c '$cmd'")
                 appendLog("Exit code: $exitCode")
-                if (errorOutput.isNotEmpty()) {
-                    appendLog("Error: ${errorOutput.take(100)}")
-                }
-                
                 if (exitCode != 0) {
+                    // Write to logcat for timing analysis
+                    Log.d("DataCollector", "=== START_DIALING: ERROR ===")
+                    if (errorOutput.isNotEmpty()) {
+                        appendLog("Error: ${errorOutput.take(100)}")
+                    }
+
                     // Try alternative: su shell -c (some devices need this)
                     appendLog("Trying: su shell -c...")
+
+                    // Write to logcat for timing analysis
+                    Log.d("DataCollector", "=== START_DIALING_2: $numberToCall (Scenario $currentPhase) ===")
                     val process2 = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
                     val exitCode2 = process2.waitFor()
                     appendLog("su shell -c exit: $exitCode2")
                     
                     if (exitCode2 != 0) {
-                        // fallback: normal call
+                        // fallback: normal CALL (still via su)
+                        Log.d("DataCollector", "=== START_DIALING_2: ERROR ===")
                         appendLog("Trying regular CALL for emergency...")
+
                         val cmd2 = "am start -a android.intent.action.CALL -d tel:$numberToCall"
-                        Runtime.getRuntime().exec(arrayOf("su", "-c", cmd2)).waitFor()
+                        Log.d("DataCollector", "=== START_DIALING_3: $numberToCall (Scenario $currentPhase) ===")
+
+                        val process3 = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd2))
+                        val exitCode3 = process3.waitFor()
+                        val errorOutput3 = process3.errorStream.bufferedReader().readText()
+
+                        appendLog("Running: su -c '$cmd2'")
+                        appendLog("Exit code: $exitCode3")
+
+                        if (exitCode3 != 0) {
+                            Log.d("DataCollector", "=== START_DIALING_3: ERROR ===")
+                            if (errorOutput3.isNotEmpty()) {
+                                appendLog("Error: ${errorOutput3.take(100)}")
+                            }
+
+                            // Final fallback: Intent method
+                            fallbackCallWithIntent(numberToCall)
+                        } else {
+                            Log.d("DataCollector", "=== START_DIALING_3: Dialed ===")
+                            appendLog("Emergency call command sent (regular CALL)")
+                        }
+                    } else {
+                        Log.d("DataCollector", "=== START_DIALING_2: Dialed ===")
+                        appendLog("Emergency call command sent")
                     }
+
                 } else {
+                    // Write to logcat for timing analysis
+                    Log.d("DataCollector", "=== START_DIALING: Dialed ===")
                     appendLog("Emergency call command sent")
                 }
             } else {
                 // use CALL
+                // Write to logcat for timing analysis
+                Log.d("DataCollector", "=== START_DIALING_NORMAL: $numberToCall (Scenario $currentPhase) ===")
+
                 val cmd = "am start -a android.intent.action.CALL -d tel:$numberToCall"
                 val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 val exitCode = process.waitFor()
                 
                 if (exitCode == 0) {
+                    Log.d("DataCollector", "=== START_DIALING_NORMAL: Dialed ===")
                     appendLog("Call command sent successfully")
                 } else {
+                    Log.d("DataCollector", "=== START_DIALING_NORMAL: ERROR ===")
                     appendLog("Call command failed (exit: $exitCode)")
                     fallbackCallWithIntent(numberToCall)
                 }
@@ -1268,10 +1418,13 @@ class MainActivity : AppCompatActivity() {
                     data = Uri.parse("tel:$number")
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
+                Log.d("DataCollector", "=== START_DIALING_FALLBACK: $number ===")
                 startActivity(callIntent)
+                Log.d("DataCollector", "=== START_DIALING_FALLBACK: Dialed ===")
                 appendLog("Fallback call initiated")
             }
         } catch (e: Exception) {
+            Log.d("DataCollector", "=== START_DIALING_FALLBACK: ERROR ===")
             appendLog("Fallback call error: ${e.message}")
         }
     }
@@ -1305,7 +1458,7 @@ class MainActivity : AppCompatActivity() {
         try {
             // Increase buffer size and clear all buffers that we capture
             // Using su -c because some devices require root for these operations
-            val buffers = listOf("radio", "events", "main", "system")
+            val buffers = listOf("radio", "events", "main", "system", "crash", "kernel")
             for (buffer in buffers) {
                 // Increase buffer size to 16MB to avoid log rotation (needs root on some devices)
                 Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -G 16M -b $buffer")).waitFor()
@@ -1317,33 +1470,28 @@ class MainActivity : AppCompatActivity() {
             appendLog("Clear logcat error: ${e.message}")
         }
     }
-    
+
     /**
-     * Capture multiple logcat buffers to separate files
-     * Returns a map of buffer name to content
+     * Capture multiple logcat buffers to separate temp files under /data/local/tmp
+     * Returns a map of buffer name to temp file path (or Error:...)
      */
-    private fun captureLogcatMultiBuffer(): Map<String, String> {
-        val buffers = listOf("radio", "events", "main", "system")
+    private fun captureLogcatMultiBuffer(startTimeStr: String): Map<String, String> {
+        val buffers = listOf("radio", "events", "main", "system", "crash", "kernel")
         val results = mutableMapOf<String, String>()
-        
+
+        appendLog("Logcat capture startTime=-T '$startTimeStr'")
+
         for (buffer in buffers) {
             try {
                 val dumpPath = "/data/local/tmp/logcat_${buffer}.txt"
-                
-                appendLog("Capturing logcat -b $buffer...")
-                
-                // Write to file
-                val writeProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -b $buffer -d > $dumpPath"))
+                appendLog("Capturing logcat -b $buffer since $startTimeStr...")
+
+                val cmd = "logcat -b $buffer -T '$startTimeStr' -d > $dumpPath"
+                val writeProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 val writeExit = writeProcess.waitFor()
-                
+
                 if (writeExit == 0) {
-                    // Read from file
-                    val readProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat $dumpPath"))
-                    val output = readProcess.inputStream.bufferedReader().readText()
-                    readProcess.waitFor()
-                    
-                    results[buffer] = output
-                    appendLog("Buffer $buffer: ${output.length} chars")
+                    results[buffer] = dumpPath
                 } else {
                     results[buffer] = "Error capturing buffer (exit: $writeExit)"
                 }
@@ -1351,25 +1499,54 @@ class MainActivity : AppCompatActivity() {
                 results[buffer] = "Error: ${e.message}"
             }
         }
-        
+
         return results
     }
-    
+
+
+
     /**
-     * Save multiple logcat buffers to separate files
+     * Save multiple logcat buffers to separate files without reading them into memory.
+     * Copies /data/local/tmp/logcat_<buffer>.txt -> app external files dir.
      */
-    private fun saveLogcatMultiBuffer(baseFileName: String) {
-        val bufferData = captureLogcatMultiBuffer()
-        
-        for ((buffer, content) in bufferData) {
-            if (content.isNotEmpty() && !content.startsWith("Error")) {
-                val fileName = "${baseFileName}_${buffer}.txt"
-                saveDataToFile(content, fileName)
-                appendLog("Saved: $fileName")
+    private fun saveLogcatMultiBuffer(baseFileName: String, startTimeStr: String) {
+        val bufferData = captureLogcatMultiBuffer(startTimeStr)
+        val outDir = getExternalFilesDir(null)
+
+        if (outDir == null) {
+            appendLog("Save error: external files dir is null")
+            return
+        }
+
+        val outDirPath = outDir.absolutePath
+
+        for ((buffer, tmpPath) in bufferData) {
+            if (tmpPath.startsWith("Error")) {
+                appendLog("Skip $buffer: $tmpPath")
+                continue
+            }
+
+            val outPath = "$outDirPath/${baseFileName}_${buffer}.txt"
+
+            try {
+                val cpExit = Runtime.getRuntime().exec(
+                    arrayOf("su", "-c", "cp $tmpPath $outPath")
+                ).waitFor()
+
+                if (cpExit == 0) {
+                    appendLog("Saved: ${baseFileName}_${buffer}.txt")
+                } else {
+                    appendLog("Save error: cp failed for $buffer (exit: $cpExit)")
+                }
+
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "rm -f $tmpPath")).waitFor()
+            } catch (e: Exception) {
+                appendLog("Save error ($buffer): ${e.message}")
             }
         }
     }
-    
+
+
     // ===== Utilities =====
     
     private fun appendLog(message: String) {

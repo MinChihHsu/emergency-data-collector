@@ -37,6 +37,9 @@ S21_USERAGENT_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_useragent.js")
 PIXEL_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_gsm_dial.js")
 PIXEL_CALLSESSION_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_callsessionadaptor.js")
 
+# Pixel Satellite Frida script
+PIXEL_SATELLITE_BLOCK_DATAGRAM_SCRIPT = os.path.join(SCRIPT_DIR, "pixel_satellite_block_datagram.js")
+
 
 # USB Vendor IDs for different modem types
 USB_VENDOR_IDS = {
@@ -209,6 +212,45 @@ def start_frida_scripts(device_type="samsung"):
 
     return True
 
+def start_frida_satellite():
+    """
+    Start Frida satellite blocker script:
+      frida -U -n com.android.phone -l $SCRIPT_DIR/pixel_satellite_block_datagram.js
+
+    Success criteria (stronger):
+    - frida process started
+    - script printed its FRIDA_READY marker within 2s
+    """
+    global frida_processes
+
+    kill_frida_processes()
+    time.sleep(0.5)
+
+    print("Starting Frida satellite script...")
+
+    try:
+        proc = subprocess.Popen(
+            ['frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_SATELLITE_BLOCK_DATAGRAM_SCRIPT],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        frida_processes.append(proc)
+        print(f"Started frida satellite for com.android.phone (PID: {proc.pid})")
+    except Exception as e:
+        print(f"Error starting satellite frida script: {e}")
+        return False
+
+    ok, out = wait_for_marker(proc, "FRIDA_READY:pixel_satellite_block_datagram", timeout_s=2.0)
+    if not ok:
+        print("Frida ready timeout or failure (Satellite).")
+        print("proc tail:\n", out)
+        return False
+
+    return True
+
+
 
 def find_usb_port(modem_type):
     """
@@ -371,6 +413,17 @@ def start_frida():
         return jsonify({"status": "ok", "message": f"Frida scripts started for {device_type}"}), 200
     else:
         return jsonify({"status": "error", "message": "Failed to start frida scripts"}), 500
+
+@app.route('/start-frida-satellite', methods=['POST'])
+def start_frida_satellite_endpoint():
+    print("\n=== Received: /start-frida-satellite ===")
+
+    success = start_frida_satellite()
+    if success:
+        return jsonify({"status": "ok", "message": "Frida satellite script started"}), 200
+    else:
+        return jsonify({"status": "error", "message": "Failed to start frida satellite script"}), 500
+
 
 
 @app.route('/wait-for-block', methods=['POST'])
