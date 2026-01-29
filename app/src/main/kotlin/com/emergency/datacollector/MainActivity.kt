@@ -620,6 +620,8 @@ class MainActivity : AppCompatActivity() {
         // Step 1: Clear logcat buffer
         clearLogcat()
 
+        val measurementStartTimeStr = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+
         // ---- Gate config (Frida + SCAT must return HTTP 200 before we proceed) ----
         val fridaEndpoint = if (currentPhase == 4) "/start-frida-satellite" else "/start-frida"
         val deviceTypeBody = """{"device_type": "${getDeviceType()}"}"""
@@ -638,6 +640,8 @@ class MainActivity : AppCompatActivity() {
 
                 // Wait for blocker to intercept, then hang up immediately
                 appendLog("Waiting for call to be blocked...")
+
+                // TODO: Timeout should be 5 minutes. Change when the app is ready.
                 val waitBlockBody = """{"timeout": 30}"""
                 sendFridaCommand("/wait-for-block", waitBlockBody) { blocked ->
                     if (blocked) {
@@ -701,7 +705,7 @@ class MainActivity : AppCompatActivity() {
                             val captureLogcat: () -> Unit = {
                                 appendLog("Capturing logcat (multiple buffers)...")
                                 val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
-                                saveLogcatMultiBuffer(baseFileName2)
+                                saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
                                 appendLog("Saved: ${baseFileName2}_*.txt")
                                 proceedToNext()
                             }
@@ -793,7 +797,7 @@ class MainActivity : AppCompatActivity() {
                                                                         val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
 
                                                                         // Save each logcat buffer to separate file
-                                                                        saveLogcatMultiBuffer(baseFileName2)
+                                                                        saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
 
                                                                         appendLog("Saved: ${baseFileName2}_*.txt")
 
@@ -873,7 +877,7 @@ class MainActivity : AppCompatActivity() {
                                                                             val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
 
                                                                             // Save each logcat buffer to separate file
-                                                                            saveLogcatMultiBuffer(baseFileName2)
+                                                                            saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
 
                                                                             appendLog("Saved: ${baseFileName2}_*.txt")
 
@@ -1023,10 +1027,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             val waitMs = if (shouldStop) 0L else 60000L
+            if (!shouldStop) appendLog("Waiting 1 minute before proceeding...")
             handler.postDelayed({
-                appendLog("Waiting 1 minute before proceeding...")
                 appendLog("Satellite connection monitoring complete")
-                callback(true)
+                callback(foundKeyword)
             }, waitMs)
 
         }
@@ -1309,8 +1313,7 @@ class MainActivity : AppCompatActivity() {
         }
         appendLog("Attempting to call: $numberToCall (Scenario $currentPhase)")
         
-        // Write to logcat for timing analysis
-        Log.d("DataCollector", "=== START_DIALING: $numberToCall (Scenario $currentPhase) ===")
+        
         
         try {
             // if it's emergency number, need to use CALL_EMERGENCY
@@ -1318,45 +1321,84 @@ class MainActivity : AppCompatActivity() {
             
             if (isEmergency) {
                 appendLog("Using emergency call method...")
-                
                 // use CALL_EMERGENCY
                 val cmd = "am start -a android.intent.action.CALL_EMERGENCY -d tel:$numberToCall"
-                appendLog("Running: su -c '$cmd'")
                 
+                // Write to logcat for timing analysis
+                Log.d("DataCollector", "=== START_DIALING: $numberToCall (Scenario $currentPhase) ===")
+
                 val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 val exitCode = process.waitFor()
                 val errorOutput = process.errorStream.bufferedReader().readText()
-                
+                appendLog("Running: su -c '$cmd'")
                 appendLog("Exit code: $exitCode")
-                if (errorOutput.isNotEmpty()) {
-                    appendLog("Error: ${errorOutput.take(100)}")
-                }
-                
                 if (exitCode != 0) {
+                    // Write to logcat for timing analysis
+                    Log.d("DataCollector", "=== START_DIALING: ERROR ===")
+                    if (errorOutput.isNotEmpty()) {
+                        appendLog("Error: ${errorOutput.take(100)}")
+                    }
+
                     // Try alternative: su shell -c (some devices need this)
                     appendLog("Trying: su shell -c...")
+
+                    // Write to logcat for timing analysis
+                    Log.d("DataCollector", "=== START_DIALING_2: $numberToCall (Scenario $currentPhase) ===")
                     val process2 = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
                     val exitCode2 = process2.waitFor()
                     appendLog("su shell -c exit: $exitCode2")
                     
                     if (exitCode2 != 0) {
-                        // fallback: normal call
+                        // fallback: normal CALL (still via su)
+                        Log.d("DataCollector", "=== START_DIALING_2: ERROR ===")
                         appendLog("Trying regular CALL for emergency...")
+
                         val cmd2 = "am start -a android.intent.action.CALL -d tel:$numberToCall"
-                        Runtime.getRuntime().exec(arrayOf("su", "-c", cmd2)).waitFor()
+                        Log.d("DataCollector", "=== START_DIALING_3: $numberToCall (Scenario $currentPhase) ===")
+
+                        val process3 = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd2))
+                        val exitCode3 = process3.waitFor()
+                        val errorOutput3 = process3.errorStream.bufferedReader().readText()
+
+                        appendLog("Running: su -c '$cmd2'")
+                        appendLog("Exit code: $exitCode3")
+
+                        if (exitCode3 != 0) {
+                            Log.d("DataCollector", "=== START_DIALING_3: ERROR ===")
+                            if (errorOutput3.isNotEmpty()) {
+                                appendLog("Error: ${errorOutput3.take(100)}")
+                            }
+
+                            // Final fallback: Intent method
+                            fallbackCallWithIntent(numberToCall)
+                        } else {
+                            Log.d("DataCollector", "=== START_DIALING_3: Dialed ===")
+                            appendLog("Emergency call command sent (regular CALL)")
+                        }
+                    } else {
+                        Log.d("DataCollector", "=== START_DIALING_2: Dialed ===")
+                        appendLog("Emergency call command sent")
                     }
+
                 } else {
+                    // Write to logcat for timing analysis
+                    Log.d("DataCollector", "=== START_DIALING: Dialed ===")
                     appendLog("Emergency call command sent")
                 }
             } else {
                 // use CALL
+                // Write to logcat for timing analysis
+                Log.d("DataCollector", "=== START_DIALING_NORMAL: $numberToCall (Scenario $currentPhase) ===")
+
                 val cmd = "am start -a android.intent.action.CALL -d tel:$numberToCall"
                 val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 val exitCode = process.waitFor()
                 
                 if (exitCode == 0) {
+                    Log.d("DataCollector", "=== START_DIALING_NORMAL: Dialed ===")
                     appendLog("Call command sent successfully")
                 } else {
+                    Log.d("DataCollector", "=== START_DIALING_NORMAL: ERROR ===")
                     appendLog("Call command failed (exit: $exitCode)")
                     fallbackCallWithIntent(numberToCall)
                 }
@@ -1376,10 +1418,13 @@ class MainActivity : AppCompatActivity() {
                     data = Uri.parse("tel:$number")
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
+                Log.d("DataCollector", "=== START_DIALING_FALLBACK: $number ===")
                 startActivity(callIntent)
+                Log.d("DataCollector", "=== START_DIALING_FALLBACK: Dialed ===")
                 appendLog("Fallback call initiated")
             }
         } catch (e: Exception) {
+            Log.d("DataCollector", "=== START_DIALING_FALLBACK: ERROR ===")
             appendLog("Fallback call error: ${e.message}")
         }
     }
@@ -1413,7 +1458,7 @@ class MainActivity : AppCompatActivity() {
         try {
             // Increase buffer size and clear all buffers that we capture
             // Using su -c because some devices require root for these operations
-            val buffers = listOf("radio", "events", "main", "system")
+            val buffers = listOf("radio", "events", "main", "system", "crash", "kernel")
             for (buffer in buffers) {
                 // Increase buffer size to 16MB to avoid log rotation (needs root on some devices)
                 Runtime.getRuntime().exec(arrayOf("su", "-c", "logcat -G 16M -b $buffer")).waitFor()
@@ -1430,19 +1475,19 @@ class MainActivity : AppCompatActivity() {
      * Capture multiple logcat buffers to separate temp files under /data/local/tmp
      * Returns a map of buffer name to temp file path (or Error:...)
      */
-    private fun captureLogcatMultiBuffer(): Map<String, String> {
-        val buffers = listOf("radio", "events", "main", "system")
+    private fun captureLogcatMultiBuffer(startTimeStr: String): Map<String, String> {
+        val buffers = listOf("radio", "events", "main", "system", "crash", "kernel")
         val results = mutableMapOf<String, String>()
+
+        appendLog("Logcat capture startTime=-T '$startTimeStr'")
 
         for (buffer in buffers) {
             try {
                 val dumpPath = "/data/local/tmp/logcat_${buffer}.txt"
-                appendLog("Capturing logcat -b $buffer...")
+                appendLog("Capturing logcat -b $buffer since $startTimeStr...")
 
-                // Dump buffer to tmp file (no in-memory read)
-                val writeProcess = Runtime.getRuntime().exec(
-                    arrayOf("su", "-c", "logcat -b $buffer -d > $dumpPath")
-                )
+                val cmd = "logcat -b $buffer -T '$startTimeStr' -d > $dumpPath"
+                val writeProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
                 val writeExit = writeProcess.waitFor()
 
                 if (writeExit == 0) {
@@ -1458,12 +1503,14 @@ class MainActivity : AppCompatActivity() {
         return results
     }
 
+
+
     /**
      * Save multiple logcat buffers to separate files without reading them into memory.
      * Copies /data/local/tmp/logcat_<buffer>.txt -> app external files dir.
      */
-    private fun saveLogcatMultiBuffer(baseFileName: String) {
-        val bufferData = captureLogcatMultiBuffer()
+    private fun saveLogcatMultiBuffer(baseFileName: String, startTimeStr: String) {
+        val bufferData = captureLogcatMultiBuffer(startTimeStr)
         val outDir = getExternalFilesDir(null)
 
         if (outDir == null) {
@@ -1482,7 +1529,6 @@ class MainActivity : AppCompatActivity() {
             val outPath = "$outDirPath/${baseFileName}_${buffer}.txt"
 
             try {
-                // Copy tmp file to app external storage (still no in-memory read)
                 val cpExit = Runtime.getRuntime().exec(
                     arrayOf("su", "-c", "cp $tmpPath $outPath")
                 ).waitFor()
@@ -1493,7 +1539,6 @@ class MainActivity : AppCompatActivity() {
                     appendLog("Save error: cp failed for $buffer (exit: $cpExit)")
                 }
 
-                // Optional: cleanup tmp file
                 Runtime.getRuntime().exec(arrayOf("su", "-c", "rm -f $tmpPath")).waitFor()
             } catch (e: Exception) {
                 appendLog("Save error ($buffer): ${e.message}")
