@@ -94,7 +94,99 @@ class MainActivity : AppCompatActivity() {
     // End call button coordinates (device-specific)
     private var endCallButtonX = 0
     private var endCallButtonY = 0
-    
+
+    // ===== Perfetto control (root) =====
+    private var perfettoPid: Int? = null
+    private var perfettoTmpTracePath: String? = null
+
+    private val perfettoTraceDir = "/data/misc/perfetto-traces"
+
+    private fun runSuShell(cmd: String): Pair<Int, String> {
+        // Run command as "shell" via su to match what worked in your manual test.
+        val p = Runtime.getRuntime().exec(arrayOf("su", "shell", "-c", cmd))
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        val code = p.waitFor()
+        return code to (out + err)
+    }
+
+    private fun startPerfettoTrace(baseFileNameNoExt: String) {
+        // IMPORTANT: do NOT write into /data/local/tmp (SELinux blocks traced/perfetto there)
+        val tmpTrace = "$perfettoTraceDir/${baseFileNameNoExt}.pftrace"
+        perfettoTmpTracePath = tmpTrace
+
+        thread {
+            try {
+                // Ensure directory exists (as root). This is quick + idempotent.
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "mkdir -p $perfettoTraceDir")).waitFor()
+
+                // Start perfetto in background and print PID
+                // Use -c /data/local/tmp/config.pbtx (no stdin/heredoc quoting problems)
+                val cmd =
+                    "sh -c '/system/bin/perfetto --txt -c /data/local/tmp/config.pbtx -o \"$tmpTrace\" >/dev/null 2>&1 & echo $!'"
+
+                val (exit, output) = runSuShell(cmd)
+                val pidStr = output.trim()
+                val pid = pidStr.toIntOrNull()
+
+                handler.post {
+                    if (exit == 0 && pid != null) {
+                        perfettoPid = pid
+                        appendLog("Perfetto started (pid=$pid): $tmpTrace")
+                    } else {
+                        appendLog("Perfetto start failed (exit=$exit): '${pidStr.take(120)}'")
+                    }
+                }
+            } catch (e: Exception) {
+                handler.post { appendLog("Perfetto start error: ${e.message}") }
+            }
+        }
+    }
+
+    private fun stopPerfettoTraceAndSave(baseFileNameNoExt: String) {
+        val pid = perfettoPid
+        val tmpTrace = perfettoTmpTracePath ?: "$perfettoTraceDir/${baseFileNameNoExt}.pftrace"
+        perfettoPid = null
+        perfettoTmpTracePath = null
+
+        val outDir = getExternalFilesDir(null)
+        if (outDir == null) {
+            appendLog("Perfetto save error: external files dir is null")
+            return
+        }
+        val outPath = "${outDir.absolutePath}/${baseFileNameNoExt}.pftrace"
+
+        thread {
+            try {
+                if (pid != null) {
+                    // SIGINT makes perfetto flush/close trace nicely
+                    val stopCmd =
+                        "sh -c 'kill -INT $pid 2>/dev/null; " +
+                                "for i in \$(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 0.1; done'"
+                    runSuShell(stopCmd)
+                }
+
+                // Copy trace out to app external files dir
+                val cpExit = Runtime.getRuntime().exec(arrayOf("su", "-c", "cp \"$tmpTrace\" \"$outPath\"")).waitFor()
+                val rmExit = Runtime.getRuntime().exec(arrayOf("su", "-c", "rm -f \"$tmpTrace\"")).waitFor()
+
+                handler.post {
+                    if (cpExit == 0) {
+                        appendLog("Perfetto saved: ${baseFileNameNoExt}.pftrace")
+                    } else {
+                        appendLog("Perfetto save error: cp failed (exit: $cpExit) tmp=$tmpTrace")
+                    }
+                    if (rmExit != 0) {
+                        appendLog("Perfetto temp cleanup warning (exit: $rmExit)")
+                    }
+                }
+            } catch (e: Exception) {
+                handler.post { appendLog("Perfetto stop/save error: ${e.message}") }
+            }
+        }
+    }
+
+
     private fun initEndCallButtonCoordinates() {
         // Set coordinates based on device model
         when {
@@ -661,6 +753,8 @@ class MainActivity : AppCompatActivity() {
                         handler.postDelayed({
                             sendFridaCommand("/pkill-phone") { _ ->
                                 appendLog("Quick pkill sent to prevent redial")
+
+                                stopPerfettoTraceAndSave(baseFileName)
                             }
                         }, 500)  // 500ms after tap
 
@@ -704,9 +798,8 @@ class MainActivity : AppCompatActivity() {
                             // Function to capture logcat
                             val captureLogcat: () -> Unit = {
                                 appendLog("Capturing logcat (multiple buffers)...")
-                                val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
-                                saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
-                                appendLog("Saved: ${baseFileName2}_*.txt")
+                                saveLogcatMultiBuffer(baseFileName, measurementStartTimeStr)
+                                appendLog("Saved: ${baseFileName}_*.txt")
                                 proceedToNext()
                             }
 
@@ -769,6 +862,8 @@ class MainActivity : AppCompatActivity() {
                                 if (!enableScat) {
                                     appendLog("Monitoring satellite connection...")
                                     monitorSatelliteConnected { connected ->
+                                        stopPerfettoTraceAndSave(baseFileName)
+
                                         if (connected) {
                                             appendLog("Satellite connected! Proceeding...")
 
@@ -794,12 +889,8 @@ class MainActivity : AppCompatActivity() {
                                                                         appendLog("Capturing logcat (multiple buffers)...")
 
                                                                         // Generate base filename (without .txt extension)
-                                                                        val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
-
-                                                                        // Save each logcat buffer to separate file
-                                                                        saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
-
-                                                                        appendLog("Saved: ${baseFileName2}_*.txt")
+                                                                        saveLogcatMultiBuffer(baseFileName, measurementStartTimeStr)
+                                                                        appendLog("Saved: ${baseFileName}_*.txt")
 
                                                                         // Next measurement or next scenario
                                                                         handler.postDelayed({
@@ -845,10 +936,11 @@ class MainActivity : AppCompatActivity() {
                                 sendScatCommand("/start-scat", scatBody) { scatOk ->
                                     if (scatOk) {
                                         appendLog("SCAT started successfully: $pcapFileName")
-
+                                        startPerfettoTrace(baseFileName)
                                         // Monitor satellite connection
                                         appendLog("Monitoring satellite connection...")
                                         monitorSatelliteConnected { connected ->
+                                            stopPerfettoTraceAndSave(baseFileName)
                                             if (connected) {
                                                 appendLog("Satellite connected! Proceeding...")
 
@@ -874,12 +966,8 @@ class MainActivity : AppCompatActivity() {
                                                                             appendLog("Capturing logcat (multiple buffers)...")
 
                                                                             // Generate base filename (without .txt extension)
-                                                                            val baseFileName2 = generateFileName(phaseLabel).replace(".txt", "")
-
-                                                                            // Save each logcat buffer to separate file
-                                                                            saveLogcatMultiBuffer(baseFileName2, measurementStartTimeStr)
-
-                                                                            appendLog("Saved: ${baseFileName2}_*.txt")
+                                                                            saveLogcatMultiBuffer(baseFileName, measurementStartTimeStr)
+                                                                            appendLog("Saved: ${baseFileName}_*.txt")
 
                                                                             // Next measurement or next scenario
                                                                             handler.postDelayed({
@@ -957,6 +1045,7 @@ class MainActivity : AppCompatActivity() {
             sendScatCommand("/start-scat", scatBody) { scatOk ->
                 if (scatOk) {
                     appendLog("SCAT started successfully: $pcapFileName")
+                    startPerfettoTrace(baseFileName)   // <-- NEW
                     if (currentPhase == 4) proceedToSatellite() else proceedToMakeCall()
                 } else {
                     appendLog("SCAT start not ready (no HTTP 200). Retrying in ${retryDelayMs}ms...")

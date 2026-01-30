@@ -19,6 +19,7 @@ import signal
 import time
 import re
 import select  # NEW
+import fcntl
 
 app = Flask(__name__)
 
@@ -55,37 +56,65 @@ frida_processes = []
 scat_process = None
 
 
-def wait_for_marker(proc, marker, timeout_s=2.0):
+def wait_for_marker(proc, marker, timeout_s=8.0):
     """
-    Wait until proc stdout contains marker.
-    Returns (True, collected_output_tail) or (False, collected_output_tail)
+    Robust marker wait:
+    - reads raw bytes from the underlying fd (os.read)
+    - does not depend on newline
+    - avoids TextIOWrapper buffering gotchas
     """
     if proc.stdout is None:
         return False, ""
 
+    fd = proc.stdout.fileno()
+
+    # set non-blocking on fd
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+    marker_b = marker.encode("utf-8", errors="ignore")
+    buf = b""
     end = time.monotonic() + timeout_s
-    tail = []
 
     while time.monotonic() < end:
-        # If process died early, stop
         if proc.poll() is not None:
-            break
+            text = buf.decode("utf-8", errors="replace")
+            tail = re.split(r"[\r\n]+", text)
+            return False, "\n".join(tail[-80:]) + f"\n(process exited rc={proc.returncode})"
 
-        rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
-        if rlist:
-            line = proc.stdout.readline()
-            if not line:
-                continue
-            tail.append(line.rstrip())
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if not r:
+            continue
 
-            # Optional early fail if script reports error
-            if "FRIDA_ERROR:" in line:
-                return False, "\n".join(tail[-50:])
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            continue
 
-            if marker in line:
-                return True, "\n".join(tail[-50:])
+        if not chunk:
+            continue
+        
+        
+        buf += chunk
 
-    return False, "\n".join(tail[-50:])
+        if marker_b in buf:
+            text = buf.decode("utf-8", errors="replace")
+            print('frida output: ', text)
+            tail = re.split(r"[\r\n]+", text)
+            return True, "\n".join(tail[-80:])
+
+        if b"FRIDA_ERROR:" in buf:
+            text = buf.decode("utf-8", errors="replace")
+            tail = re.split(r"[\r\n]+", text)
+            return False, "\n".join(tail[-80:])
+
+        # prevent unbounded growth
+        if len(buf) > 300_000:
+            buf = buf[-80_000:]
+
+    text = buf.decode("utf-8", errors="replace")
+    tail = re.split(r"[\r\n]+", text)
+    return False, "\n".join(tail[-80:])
 
 
 def kill_frida_processes():
@@ -125,11 +154,11 @@ def start_frida_scripts(device_type="samsung"):
         # gsm_dial for Pixel
         try:
             proc1 = subprocess.Popen(
-                ['frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_GSM_DIAL_SCRIPT],
+                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_GSM_DIAL_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                text=False,
+                bufsize=0
             )
             frida_processes.append(proc1)
             print(f"Started frida for com.android.phone (Pixel) (PID: {proc1.pid})")
@@ -142,11 +171,11 @@ def start_frida_scripts(device_type="samsung"):
         # callsessionadaptor for Pixel (using com.shannon.imsservice)
         try:
             proc2 = subprocess.Popen(
-                ['frida', '-U', '-n', 'com.shannon.imsservice', '-l', PIXEL_CALLSESSION_SCRIPT],
+                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.shannon.imsservice', '-l', PIXEL_CALLSESSION_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                text=False,
+                bufsize=0
             )
             frida_processes.append(proc2)
             print(f"Started frida for com.shannon.imsservice (Pixel) (PID: {proc2.pid})")
@@ -171,11 +200,11 @@ def start_frida_scripts(device_type="samsung"):
         # gsm_dial for Samsung
         try:
             proc1 = subprocess.Popen(
-                ['frida', '-U', '-n', 'com.android.phone', '-l', S21_GSM_DIAL_SCRIPT],
+                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.android.phone', '-l', S21_GSM_DIAL_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                text=False,
+                bufsize=0
             )
             frida_processes.append(proc1)
             print(f"Started frida for com.android.phone (Samsung) (PID: {proc1.pid})")
@@ -184,15 +213,15 @@ def start_frida_scripts(device_type="samsung"):
             return False
 
         time.sleep(1)
-
+    # 'stdbuf', '-oL', '-eL', 
         # useragent for Samsung
         try:
             proc2 = subprocess.Popen(
-                ['frida', '-U', '-n', 'com.sec.imsservice', '-l', S21_USERAGENT_SCRIPT],
+                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.sec.imsservice', '-l', S21_USERAGENT_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                text=False,
+                bufsize=0
             )
             frida_processes.append(proc2)
             print(f"Started frida for com.sec.imsservice (Samsung) (PID: {proc2.pid})")
@@ -206,6 +235,7 @@ def start_frida_scripts(device_type="samsung"):
 
         if not (ok1 and ok2):
             print("Frida ready timeout or failure (Samsung).")
+            print("ok1:", ok1, ", ok2:", ok2  )
             print("proc1 tail:\n", out1)
             print("proc2 tail:\n", out2)
             return False
@@ -230,11 +260,11 @@ def start_frida_satellite():
 
     try:
         proc = subprocess.Popen(
-            ['frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_SATELLITE_BLOCK_DATAGRAM_SCRIPT],
+            ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_SATELLITE_BLOCK_DATAGRAM_SCRIPT],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
+            text=False,
+            bufsize=0
         )
         frida_processes.append(proc)
         print(f"Started frida satellite for com.android.phone (PID: {proc.pid})")
