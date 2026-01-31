@@ -56,7 +56,7 @@ frida_processes = []
 scat_process = None
 
 
-def wait_for_marker(proc, marker, timeout_s=8.0):
+def wait_for_marker(proc, marker, timeout_s=2.0):
     """
     Robust marker wait:
     - reads raw bytes from the underlying fd (os.read)
@@ -154,7 +154,7 @@ def start_frida_scripts(device_type="samsung"):
         # gsm_dial for Pixel
         try:
             proc1 = subprocess.Popen(
-                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_GSM_DIAL_SCRIPT],
+                ['frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_GSM_DIAL_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=False,
@@ -171,7 +171,7 @@ def start_frida_scripts(device_type="samsung"):
         # callsessionadaptor for Pixel (using com.shannon.imsservice)
         try:
             proc2 = subprocess.Popen(
-                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.shannon.imsservice', '-l', PIXEL_CALLSESSION_SCRIPT],
+                ['frida', '-U', '-n', 'com.shannon.imsservice', '-l', PIXEL_CALLSESSION_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=False,
@@ -200,7 +200,7 @@ def start_frida_scripts(device_type="samsung"):
         # gsm_dial for Samsung
         try:
             proc1 = subprocess.Popen(
-                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.android.phone', '-l', S21_GSM_DIAL_SCRIPT],
+                ['frida', '-U', '-n', 'com.android.phone', '-l', S21_GSM_DIAL_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=False,
@@ -217,7 +217,7 @@ def start_frida_scripts(device_type="samsung"):
         # useragent for Samsung
         try:
             proc2 = subprocess.Popen(
-                ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.sec.imsservice', '-l', S21_USERAGENT_SCRIPT],
+                ['frida', '-U', '-n', 'com.sec.imsservice', '-l', S21_USERAGENT_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=False,
@@ -260,7 +260,7 @@ def start_frida_satellite():
 
     try:
         proc = subprocess.Popen(
-            ['stdbuf', '-oL', '-eL', 'frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_SATELLITE_BLOCK_DATAGRAM_SCRIPT],
+            ['frida', '-U', '-n', 'com.android.phone', '-l', PIXEL_SATELLITE_BLOCK_DATAGRAM_SCRIPT],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=False,
