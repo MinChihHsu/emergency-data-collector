@@ -486,9 +486,10 @@ def wait_for_block():
             rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
             if rlist:
                 try:
-                    line = proc.stdout.readline()
-                    if line:
-                        line = line.rstrip()
+                    line_bytes = proc.stdout.readline()
+                    if line_bytes:
+                        # Decode bytes to string (stdout is in binary mode)
+                        line = line_bytes.decode('utf-8', errors='replace').rstrip()
                         # Check for BLOCKED marker
                         if "BLOCKED:" in line:
                             print(f"*** CALL BLOCKED: {line}")
@@ -498,7 +499,8 @@ def wait_for_block():
                                 "blocked": True,
                                 "detail": line
                             }), 200
-                except:
+                except Exception as e:
+                    print(f"Error reading Frida output: {e}")
                     pass
         
         time.sleep(0.05)  # Small sleep to prevent CPU spin
