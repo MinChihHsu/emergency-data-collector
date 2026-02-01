@@ -1,4 +1,4 @@
-Java.perform(function() {
+Java.perform(function () {
     console.log("[*] Starting Frida script to hook UserAgent.makeCall()...");
     function reportReady(id) {
         console.log("FRIDA_READY:" + id);
@@ -12,7 +12,7 @@ Java.perform(function() {
     try {
         // Get the UserAgent class
         var UserAgent = Java.use("com.sec.internal.ims.core.handler.secims.UserAgent");
-        
+
         // Hook the makeCall method with the CORRECT parameter types
         UserAgent.makeCall.overload(
             'java.lang.String',
@@ -33,34 +33,35 @@ Java.perform(function() {
             'int',
             'java.lang.String',
             'android.os.Message'
-        ).implementation = function(destUri, origUri, type, dispName, dialedNumber, additionalContents, 
-                                     cli, pEmergencyInfo, additionalSipHeaders, alertInfo, 
-                                     isLteEpsOnlyAttached, p2p, cmcBoundSessionId, composerData, 
-                                     replaceCallId, cmcEdCallSlot, isGeolocReqForNormalCall, 
-                                     idcExtra, cmcCallComposerData, message) {
-            console.log("[!] ===== UserAgent.makeCall() INTERCEPTED =====");
-            console.log("[!] Destination URI: " + destUri);
-            console.log("[!] Origin URI: " + origUri);
-            console.log("[!] Call Type: " + type);
-            console.log("[!] Dialed Number: " + dialedNumber);
-            console.log("[!] Emergency Info: " + pEmergencyInfo);
-            console.log("[!] CLI: " + cli);
-            console.log("[!] Display Name: " + dispName);
-            console.log("[!] Is LTE EPS Only: " + isLteEpsOnlyAttached);
-            console.log("[!] Timestamp: " + new Date().toISOString());
-            console.log("[!] Method VOIDED - not calling original implementation");
-            
-            // Do nothing - void the function
-            // The original method is not called, so no call will be made
-            return;
-        };
-        
+        ).implementation = function (destUri, origUri, type, dispName, dialedNumber, additionalContents,
+            cli, pEmergencyInfo, additionalSipHeaders, alertInfo,
+            isLteEpsOnlyAttached, p2p, cmcBoundSessionId, composerData,
+            replaceCallId, cmcEdCallSlot, isGeolocReqForNormalCall,
+            idcExtra, cmcCallComposerData, message) {
+                // BLOCKED marker for wait-for-block API detection
+                console.log("[!] ===== BLOCKED: UserAgent.makeCall() =====");
+                console.log("[!] Destination URI: " + destUri);
+                console.log("[!] Origin URI: " + origUri);
+                console.log("[!] Call Type: " + type);
+                console.log("[!] Dialed Number: " + dialedNumber);
+                console.log("[!] Emergency Info: " + pEmergencyInfo);
+                console.log("[!] CLI: " + cli);
+                console.log("[!] Display Name: " + dispName);
+                console.log("[!] Is LTE EPS Only: " + isLteEpsOnlyAttached);
+                console.log("[!] Timestamp: " + new Date().toISOString());
+                console.log("[+] Call blocked - voided");
+
+                // Do nothing - void the function
+                // The original method is not called, so no call will be made
+                return;
+            };
+
         console.log("[+] Successfully hooked UserAgent.makeCall()");
         console.log("[+] Calls will be blocked at UserAgent level");
         reportReady("s21_void_useragent");
 
-        
-    } catch(e) {
+
+    } catch (e) {
         console.log("[-] Failed to hook UserAgent.makeCall(): " + e);
         console.log("[-] Error details: " + e.stack);
         reportError("s21_void_useragent", e);
