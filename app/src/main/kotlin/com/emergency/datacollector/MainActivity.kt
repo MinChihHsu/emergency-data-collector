@@ -224,12 +224,23 @@ class MainActivity : AppCompatActivity() {
                 // Copy trace out to app external files dir
                 val cpExit =
                     Runtime.getRuntime().exec(arrayOf("su", "-c", "cp \"$tmpTrace\" \"$outPath\"")).waitFor()
+
+                // ✅ Ensure adb pull can read it
+                val chmodExit = if (cpExit == 0) {
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "chmod +r \"$outPath\"")).waitFor()
+                } else {
+                    -1
+                }
+
                 val rmExit =
                     Runtime.getRuntime().exec(arrayOf("su", "-c", "rm -f \"$tmpTrace\"")).waitFor()
 
                 handler.post {
                     if (cpExit == 0) {
                         appendLog("Perfetto saved: ${baseFileNameNoExt}.pftrace")
+                        if (chmodExit != 0) {
+                            appendLog("Perfetto chmod warning (exit: $chmodExit) path=$outPath")
+                        }
                         if (rmExit != 0) {
                             appendLog("Perfetto temp cleanup warning (exit: $rmExit)")
                         }
@@ -237,6 +248,7 @@ class MainActivity : AppCompatActivity() {
                         appendLog("Perfetto save error: cp failed (exit: $cpExit) tmp=$tmpTrace")
                     }
                 }
+
             } catch (e: Exception) {
                 handler.post { appendLog("Perfetto stop/save error: ${e.message}") }
             }
