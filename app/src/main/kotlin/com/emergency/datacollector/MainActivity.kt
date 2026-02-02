@@ -68,6 +68,8 @@ class MainActivity : AppCompatActivity() {
     private var enableScat: Boolean = true  // Set to true to enable SCAT recording on PC
     private val httpConnectTimeoutMs = 20000
     private val httpReadTimeoutMs = 30000
+    // ✅ Wait-for-block timeout (seconds)
+    private var waitForBlockTimeoutSec: Int = 30
 
 
     // Scenario selection
@@ -616,7 +618,66 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    
+
+    private fun waitForBlockMinWindow(timeoutSec: Int, callback: (Boolean) -> Unit) {
+        thread {
+            val startMs = System.currentTimeMillis()
+            fun finish(blocked: Boolean) {
+                val elapsed = System.currentTimeMillis() - startMs
+                val targetMs = timeoutSec * 1000L
+                val remaining = targetMs - elapsed
+
+                // ✅ If we got a quick "not blocked" (including immediate 500), wait out the window.
+                if (!blocked && remaining > 0) {
+                    try { Thread.sleep(remaining) } catch (_: Exception) {}
+                }
+                handler.post { callback(blocked) }
+            }
+
+            try {
+                val url = URL("$fridaServerUrl/wait-for-block")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = httpConnectTimeoutMs
+                    // Let the server-side timeout drive duration; give a little slack.
+                    readTimeout = maxOf(httpReadTimeoutMs, timeoutSec * 1000 + 5000)
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                }
+
+                val body = """{"timeout": $timeoutSec}"""
+                conn.outputStream.bufferedWriter().use { it.write(body) }
+
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val resp = stream?.bufferedReader()?.readText().orEmpty()
+                conn.disconnect()
+
+                val blocked = Regex("\"blocked\"\\s*:\\s*(true|false)", RegexOption.IGNORE_CASE)
+                    .find(resp)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.lowercase() == "true"
+
+                handler.post {
+                    appendLog("HTTP /wait-for-block: code=$code blocked=$blocked")
+                    if (code !in 200..299) {
+                        appendLog("wait-for-block non-200, will wait out ${timeoutSec}s window before proceeding")
+                    }
+                }
+
+                finish(blocked)
+            } catch (e: Exception) {
+                handler.post {
+                    appendLog("wait-for-block error: ${e.message}")
+                    appendLog("wait-for-block error, will wait out ${timeoutSec}s window before proceeding")
+                }
+                finish(false)
+            }
+        }
+    }
+
+
     private fun getDeviceType(): String {
         // Determine device type for Frida scripts (samsung or pixel)
         return when {
@@ -803,9 +864,8 @@ class MainActivity : AppCompatActivity() {
                 appendLog("Waiting for call to be blocked...")
 
                 // TODO: Timeout should be 5 minutes. Change when the app is ready.
-                val waitBlockBody = """{"timeout": 30}"""
-                sendFridaCommand("/wait-for-block", waitBlockBody) { blocked ->
-                    if (blocked) {
+                waitForBlockMinWindow(timeoutSec = waitForBlockTimeoutSec) { blocked ->
+                if (blocked) {
                         appendLog("Call blocked! Waiting 2s for UI...")
                         Log.d("DataCollector", "=== CALL_BLOCKED: Waiting 2s before hangup ===" )
                     } else {
@@ -1098,7 +1158,15 @@ class MainActivity : AppCompatActivity() {
 
 
         // Step 2: Start Frida blocker (must be before SCAT) - now enforced
-        startFridaUntilOkThenStartScat()
+        // Step 2: Start Frida blocker (must be before SCAT) - now enforced
+        // ✅ Scenario 3: skip starting frida script (/start-frida)
+        if (currentPhase == 3) {
+            appendLog("Scenario 3: skipping Frida (/start-frida)")
+            startScatUntilOkThenProceed()
+        } else {
+            startFridaUntilOkThenStartScat()
+        }
+
     }
 
 
