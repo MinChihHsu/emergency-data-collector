@@ -1076,8 +1076,31 @@ class MainActivity : AppCompatActivity() {
                                     stopPerfettoTraceAndSave(baseFileName)
 
                                     if (!connected) {
-                                        appendLog("Satellite connection failed or timeout")
-                                        finishCollection("Satellite connection failed")
+                                        appendLog("Satellite connection failed or timeout (measurement=$currentMeasurementCount). Continue next.")
+                                        
+                                        // 這裡照你成功時的 cleanup 做（至少要 stopScat / pkill / 保存 log）
+                                        // 然後進下一次 measurement 或結束 scenario
+                                        handler.postDelayed({
+                                            if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                            if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                performMeasurement()
+                                            } else {
+                                                appendLog("Scenario $currentPhase Complete!")
+                                                val nextPhase = getNextEnabledPhase(currentPhase)
+                                                if (nextPhase != null) {
+                                                    when (nextPhase) {
+                                                        1 -> startPhase1Measurements()
+                                                        2 -> startPhase2()
+                                                        3 -> startPhase3()
+                                                        4 -> startPhase4()
+                                                    }
+                                                } else {
+                                                    finishCollection("All measurements complete!")
+                                                }
+                                            }
+                                        }, delayBetweenCalls)
+
                                         return@monitorSatelliteConnected
                                     }
 
@@ -1228,7 +1251,7 @@ class MainActivity : AppCompatActivity() {
 
         val startTime = System.currentTimeMillis()
         val timeoutMillis = 5 * 60 * 1000L  // 5 minutes
-        val checkIntervalMillis = 2000L  // Check every 2 seconds
+        val checkIntervalMillis = 60_000L   // Check every 60 seconds
 
         var isMonitoring = true
         var lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
@@ -1297,15 +1320,11 @@ class MainActivity : AppCompatActivity() {
                     val logcatOutput = reader.readText()
                     reader.close()
                     process.waitFor()
-                    val nowMs = System.currentTimeMillis()
-                    if (nowMs - lastPollDoneLogMs >= 30_000L) {
-                        lastPollDoneLogMs = nowMs
-                        appendLog("Logcat poll done, len=${logcatOutput.length}")
-                    }
+                    appendLog("Logcat poll done, len=${logcatOutput.length}")
 
 
                     // Update last check time for next iteration
-                    lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+                    lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date(System.currentTimeMillis() - 500))
 
                     // Check if we found the satellite connection indicators
                     if (logcatOutput.contains("SATELLITE_MODEM_STATE_CONNECTED") ||
