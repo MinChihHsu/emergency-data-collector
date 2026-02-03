@@ -52,7 +52,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var checkScenario4: CheckBox
     private lateinit var btnStartExperiment: Button
     private lateinit var btnStopExperiment: Button
-    
+    private lateinit var btnTestNormalCall: Button
+
+
     // Configuration
     private var dialNumber: String = ""
     private var emergencyNumber: String = "911"
@@ -68,6 +70,8 @@ class MainActivity : AppCompatActivity() {
     private var enableScat: Boolean = true  // Set to true to enable SCAT recording on PC
     private val httpConnectTimeoutMs = 20000
     private val httpReadTimeoutMs = 30000
+    // ✅ Wait-for-block timeout (seconds)
+    private var waitForBlockTimeoutSec: Int = 30
 
 
     // Scenario selection
@@ -75,7 +79,9 @@ class MainActivity : AppCompatActivity() {
     private var runScenario2 = true
     private var runScenario3 = true
     private var runScenario4 = true
-    
+    private var isTestNormalCallMode: Boolean = false
+
+
     // Current phase: 1 = Home Carrier, 2 = Visitor Carrier
     private var currentPhase = 1
     private var currentMeasurementCount = 0
@@ -310,8 +316,10 @@ class MainActivity : AppCompatActivity() {
         checkScenario4 = findViewById(R.id.checkScenario4)
         btnStartExperiment = findViewById(R.id.btnStartExperiment)
         btnStopExperiment = findViewById(R.id.btnStopExperiment)
+        btnTestNormalCall = findViewById(R.id.btnTestNormalCall)
 
-        
+
+
         // Setup experiments spinner (1-10)
         val experimentOptions = (1..10).toList()
         val spinnerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, experimentOptions)
@@ -355,13 +363,53 @@ class MainActivity : AppCompatActivity() {
                 runScenario2 = checkScenario2.isChecked
                 runScenario3 = checkScenario3.isChecked
                 runScenario4 = checkScenario4.isChecked
-                
+                isTestNormalCallMode = false
+                if (runScenario3 && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "WiFi Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: WiFi Calling number is emergency-like: '${normalizeDialNumber(wifiCallingNumber)}'")
+                    return@setOnClickListener
+                }
+
+
                 startFullCollection()
             } else {
                 requestPermissions()
             }
         }
-        
+
+        btnTestNormalCall.setOnClickListener {
+            if (checkPermissions()) {
+                // Update config from UI
+                experimentsPerScenario = spinnerExperimentsCount.selectedItem as Int
+                totalMeasurementsPerPhase = experimentsPerScenario
+                wifiCallingNumber = editWifiCallingNumber.text.toString()
+
+                runScenario1 = checkScenario1.isChecked
+                runScenario2 = false // ✅ Test mode ignores Scenario 2
+                runScenario3 = checkScenario3.isChecked
+                runScenario4 = checkScenario4.isChecked
+
+                // Scenario 1 test needs WiFi Calling number (normal CALL)
+                if (runScenario1 && wifiCallingNumber.isBlank()) {
+                    Toast.makeText(this, "Please input WiFi Calling number for Scenario #1 normal call test", Toast.LENGTH_LONG).show()
+                    appendLog("Test mode aborted: Scenario #1 checked but WiFi Calling number is empty")
+                    return@setOnClickListener
+                }
+                if ((runScenario1 || runScenario3) && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "Test blocked: WiFi Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Test blocked: WiFi Calling number is emergency-like: '${normalizeDialNumber(wifiCallingNumber)}'")
+                    return@setOnClickListener
+                }
+
+
+                isTestNormalCallMode = true
+                startFullCollection()
+            } else {
+                requestPermissions()
+            }
+        }
+
+
         btnStopExperiment.setOnClickListener {
             stopCollection()
         }
@@ -515,6 +563,8 @@ class MainActivity : AppCompatActivity() {
 
         btnStartExperiment.isEnabled = false
         btnStopExperiment.isEnabled = true
+        btnTestNormalCall.isEnabled = false
+
         setInputsEnabled(false)
         
         appendLog("=== Starting Full Collection ===")
@@ -616,7 +666,66 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    
+
+    private fun waitForBlockMinWindow(timeoutSec: Int, callback: (Boolean) -> Unit) {
+        thread {
+            val startMs = System.currentTimeMillis()
+            fun finish(blocked: Boolean) {
+                val elapsed = System.currentTimeMillis() - startMs
+                val targetMs = timeoutSec * 1000L
+                val remaining = targetMs - elapsed
+
+                // ✅ If we got a quick "not blocked" (including immediate 500), wait out the window.
+                if (!blocked && remaining > 0) {
+                    try { Thread.sleep(remaining) } catch (_: Exception) {}
+                }
+                handler.post { callback(blocked) }
+            }
+
+            try {
+                val url = URL("$fridaServerUrl/wait-for-block")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = httpConnectTimeoutMs
+                    // Let the server-side timeout drive duration; give a little slack.
+                    readTimeout = maxOf(httpReadTimeoutMs, timeoutSec * 1000 + 5000)
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                }
+
+                val body = """{"timeout": $timeoutSec}"""
+                conn.outputStream.bufferedWriter().use { it.write(body) }
+
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val resp = stream?.bufferedReader()?.readText().orEmpty()
+                conn.disconnect()
+
+                val blocked = Regex("\"blocked\"\\s*:\\s*(true|false)", RegexOption.IGNORE_CASE)
+                    .find(resp)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.lowercase() == "true"
+
+                handler.post {
+                    appendLog("HTTP /wait-for-block: code=$code blocked=$blocked")
+                    if (code !in 200..299) {
+                        appendLog("wait-for-block non-200, will wait out ${timeoutSec}s window before proceeding")
+                    }
+                }
+
+                finish(blocked)
+            } catch (e: Exception) {
+                handler.post {
+                    appendLog("wait-for-block error: ${e.message}")
+                    appendLog("wait-for-block error, will wait out ${timeoutSec}s window before proceeding")
+                }
+                finish(false)
+            }
+        }
+    }
+
+
     private fun getDeviceType(): String {
         // Determine device type for Frida scripts (samsung or pixel)
         return when {
@@ -797,15 +906,19 @@ class MainActivity : AppCompatActivity() {
 
                 // Make the call
                 appendLog("Dialing...")
-                makeCall()
+                if (isTestNormalCallMode && currentPhase == 1) {
+                    makeNormalCallToWifiCallingNumberForTestScenario1()
+                } else {
+                    makeCall()
+                }
+
 
                 // Wait for blocker to intercept, then hang up immediately
                 appendLog("Waiting for call to be blocked...")
 
                 // TODO: Timeout should be 5 minutes. Change when the app is ready.
-                val waitBlockBody = """{"timeout": 30}"""
-                sendFridaCommand("/wait-for-block", waitBlockBody) { blocked ->
-                    if (blocked) {
+                waitForBlockMinWindow(timeoutSec = waitForBlockTimeoutSec) { blocked ->
+                if (blocked) {
                         appendLog("Call blocked! Waiting 2s for UI...")
                         Log.d("DataCollector", "=== CALL_BLOCKED: Waiting 2s before hangup ===" )
                     } else {
@@ -963,8 +1076,31 @@ class MainActivity : AppCompatActivity() {
                                     stopPerfettoTraceAndSave(baseFileName)
 
                                     if (!connected) {
-                                        appendLog("Satellite connection failed or timeout")
-                                        finishCollection("Satellite connection failed")
+                                        appendLog("Satellite connection failed or timeout (measurement=$currentMeasurementCount). Continue next.")
+                                        
+                                        // 這裡照你成功時的 cleanup 做（至少要 stopScat / pkill / 保存 log）
+                                        // 然後進下一次 measurement 或結束 scenario
+                                        handler.postDelayed({
+                                            if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+
+                                            if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                                performMeasurement()
+                                            } else {
+                                                appendLog("Scenario $currentPhase Complete!")
+                                                val nextPhase = getNextEnabledPhase(currentPhase)
+                                                if (nextPhase != null) {
+                                                    when (nextPhase) {
+                                                        1 -> startPhase1Measurements()
+                                                        2 -> startPhase2()
+                                                        3 -> startPhase3()
+                                                        4 -> startPhase4()
+                                                    }
+                                                } else {
+                                                    finishCollection("All measurements complete!")
+                                                }
+                                            }
+                                        }, delayBetweenCalls)
+
                                         return@monitorSatelliteConnected
                                     }
 
@@ -1098,147 +1234,61 @@ class MainActivity : AppCompatActivity() {
 
 
         // Step 2: Start Frida blocker (must be before SCAT) - now enforced
-        startFridaUntilOkThenStartScat()
+        // Step 2: Start Frida blocker (must be before SCAT) - now enforced
+        // ✅ Scenario 3: skip starting frida script (/start-frida)
+        if (currentPhase == 3) {
+            appendLog("Scenario 3: skipping Frida (/start-frida)")
+            startScatUntilOkThenProceed()
+        } else {
+            startFridaUntilOkThenStartScat()
+        }
+
     }
 
 
     private fun monitorSatelliteConnected(callback: (Boolean) -> Unit) {
-        appendLog("Monitoring satellite connection (timeout: 5 minutes)...")
+        appendLog("Starting satellite monitoring service (timeout: 5 minutes)...")
 
-        val startTime = System.currentTimeMillis()
-        val timeoutMillis = 5 * 60 * 1000L  // 5 minutes
-        val checkIntervalMillis = 2000L  // Check every 2 seconds
+        // ✅ 確保舊的Service已停止（防止重複啟動）
+        SatelliteMonitorService.stop(this)
 
-        var isMonitoring = true
-        var lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
-        var lastPollDoneLogMs = 0L
+        // ✅ 等待100ms確保舊Service完全停止
+        handler.postDelayed({
+            // 使用 Foreground Service 進行監控
+            SatelliteMonitorService.start(this) { foundKeyword ->
+                handler.post {
+                    val reason = if (foundKeyword) "Satellite connected" else "Timeout reached"
+                    appendLog("Satellite monitoring stopped: $reason")
 
-        // Function to stop monitoring and cleanup
-        fun stopMonitoring(foundKeyword: Boolean) {
-            if (!isMonitoring) return
-            isMonitoring = false
+                    // ✅ 保持原有的等待邏輯：只有在成功連接且未停止時才等待1分鐘
+                    val waitMs = if (shouldStop || !foundKeyword) 0L else 60000L
+                    if (waitMs > 0) appendLog("Waiting 1 minute before proceeding...")
 
-            val reason = if (foundKeyword) "Satellite connected" else "Timeout reached (5 minutes)"
-            appendLog("Satellite monitoring stopped: $reason")
-
-            // Force stop Stargate app
-            appendLog("Force stopping Stargate app...")
-            try {
-                val cmd = "am force-stop com.google.android.apps.stargate"
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-                val exitCode = process.waitFor()
-
-                if (exitCode == 0) {
-                    appendLog("Stargate app force-stopped successfully")
-                } else {
-                    appendLog("Warning: Force-stop exit code: $exitCode")
-                }
-            } catch (e: Exception) {
-                appendLog("Force-stop error: ${e.message}")
-            }
-
-            val waitMs = if (shouldStop) 0L else 60000L
-            if (!shouldStop) appendLog("Waiting 1 minute before proceeding...")
-            handler.postDelayed({
-                appendLog("Satellite connection monitoring complete")
-                callback(foundKeyword)
-            }, waitMs)
-
-        }
-
-        // Function to check logcat periodically
-        fun checkLogcat() {
-            if (!isMonitoring) return
-
-            if (shouldStop || !isCollectionRunning) {
-                appendLog("Stop requested. Aborting satellite monitoring...")
-                stopMonitoring(false)
-                return
-            }
-
-            // Check if timeout reached
-            val elapsedTime = System.currentTimeMillis() - startTime
-            if (elapsedTime >= timeoutMillis) {
-                appendLog("Satellite monitoring timeout reached (5 minutes)")
-                stopMonitoring(false)
-                return
-            }
-
-            // Check logcat for keyword in background thread
-            thread {
-                try {
-                    // Use -T (time filter) to only read logs since last check
-                    // Use -e (regex) to filter for our patterns
-                    // This is much more efficient and won't miss logs
-                    val cmd = "logcat -T '$lastCheckTime' -d -e 'SATELLITE_MODEM_STATE_CONNECTED|Entering ConnectedState'"
-                    val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
-                    val reader = process.inputStream.bufferedReader()
-                    val logcatOutput = reader.readText()
-                    reader.close()
-                    process.waitFor()
-                    val nowMs = System.currentTimeMillis()
-                    if (nowMs - lastPollDoneLogMs >= 30_000L) {
-                        lastPollDoneLogMs = nowMs
-                        appendLog("Logcat poll done, len=${logcatOutput.length}")
-                    }
-
-
-                    // Update last check time for next iteration
-                    lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
-
-                    // Check if we found the satellite connection indicators
-                    if (logcatOutput.contains("SATELLITE_MODEM_STATE_CONNECTED") ||
-                        logcatOutput.contains("Entering ConnectedState")) {
-                        handler.post {
-                            if (isMonitoring) {
-                                appendLog("Satellite connection detected in logcat!")
-                                val matchedLine = logcatOutput.lines().firstOrNull {
-                                    it.contains("SATELLITE_MODEM_STATE_CONNECTED") ||
-                                            it.contains("Entering ConnectedState")
-                                }
-                                if (matchedLine != null) {
-                                    appendLog("Match: ${matchedLine.take(150)}")
-                                }
-                                stopMonitoring(true)
-                            }
-                        }
-                        return@thread
-                    }
-
-                    // Schedule next check
                     handler.postDelayed({
-                        if (isMonitoring) {
-                            checkLogcat()
-                        }
-                    }, checkIntervalMillis)
-
-                } catch (e: Exception) {
-                    handler.post {
-                        appendLog("Logcat check error: ${e.message}")
-                        // Continue monitoring despite error
-                        handler.postDelayed({
-                            if (isMonitoring) {
-                                checkLogcat()
-                            }
-                        }, checkIntervalMillis)
-                    }
+                        appendLog("Satellite connection monitoring complete")
+                        callback(foundKeyword)
+                    }, waitMs)
                 }
             }
-        }
-
-        // Start monitoring
-        checkLogcat()
+        }, 100)
     }
+
 
     private fun stopCollection() {
         shouldStop = true
         appendLog("Stopping collection...")
-        // updateProgress("Stopping...")
+
+        // ✅ 停止 satellite monitoring service
+        SatelliteMonitorService.stop(this)
     }
-    
+
+
     private fun finishCollection(message: String) {
         isCollectionRunning = false
-        
+
+        // ✅ 確保 service 被停止（雙重保險）
+        SatelliteMonitorService.stop(this)
+
         // Ensure phone app is killed
         appendLog("Killing phone app on exit...")
         sendFridaCommand("/pkill-phone") { _ ->
@@ -1248,27 +1298,34 @@ class MainActivity : AppCompatActivity() {
                 }
             }, 500)
         }
-        
+
         // restoring setting
         appendLog("Restoring settings...")
         enableSim()
         disableWifiCalling()
-        
-        // updateProgress(message)
+
         appendLog("=== $message ===")
-        
+
         runOnUiThread {
             btnStartExperiment.isEnabled = true
             btnStopExperiment.isEnabled = false
+            btnTestNormalCall.isEnabled = true
             setInputsEnabled(true)
         }
     }
-    
+
+
     private fun setInputsEnabled(enabled: Boolean) {
-        //editDialNumber.isEnabled = enabled
         btnRefreshGps.isEnabled = enabled
+        editWifiCallingNumber.isEnabled = enabled
+        spinnerExperimentsCount.isEnabled = enabled
+        checkScenario1.isEnabled = enabled
+        checkScenario2.isEnabled = enabled
+        checkScenario3.isEnabled = enabled
+        checkScenario4.isEnabled = enabled
     }
-    
+
+
     // ===== SIM Control =====
     
     /**
@@ -1416,7 +1473,41 @@ class MainActivity : AppCompatActivity() {
     }
     
     // ===== Call Functions =====
-    
+
+    private fun normalizeDialNumber(s: String): String {
+        return s.trim().filter { it.isDigit() }
+    }
+
+    private fun isEmergencyLikeNumber(s: String): Boolean {
+        val n = normalizeDialNumber(s)
+        return n in setOf("911", "112", "110", "119", "999")
+    }
+
+    private fun makeNormalCallToWifiCallingNumberForTestScenario1() {
+        val numberToCall = wifiCallingNumber.trim()
+        appendLog("TEST MODE: Scenario 1 normal CALL to: $numberToCall")
+
+        try {
+            Log.d("DataCollector", "=== START_DIALING_TEST_NORMAL: $numberToCall (Scenario 1) ===")
+            val cmd = "am start -a android.intent.action.CALL -d tel:$numberToCall"
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val exitCode = process.waitFor()
+
+            if (exitCode == 0) {
+                Log.d("DataCollector", "=== START_DIALING_TEST_NORMAL: Dialed ===")
+                appendLog("Test normal CALL command sent successfully")
+            } else {
+                Log.d("DataCollector", "=== START_DIALING_TEST_NORMAL: ERROR ===")
+                appendLog("Test normal CALL failed (exit: $exitCode). Falling back to Intent...")
+                fallbackCallWithIntent(numberToCall)
+            }
+        } catch (e: Exception) {
+            appendLog("Test normal CALL error: ${e.message}. Falling back to Intent...")
+            fallbackCallWithIntent(numberToCall)
+        }
+    }
+
+
     private fun makeCall() {
         // Scenario 3 uses WiFi Calling number, other use emergency number
         val numberToCall = if (currentPhase == 3 && wifiCallingNumber.isNotEmpty()) {
