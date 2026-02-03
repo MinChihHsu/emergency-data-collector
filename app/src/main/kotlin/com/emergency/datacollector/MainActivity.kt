@@ -52,7 +52,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var checkScenario4: CheckBox
     private lateinit var btnStartExperiment: Button
     private lateinit var btnStopExperiment: Button
-    
+    private lateinit var btnTestNormalCall: Button
+
+
     // Configuration
     private var dialNumber: String = ""
     private var emergencyNumber: String = "911"
@@ -77,7 +79,9 @@ class MainActivity : AppCompatActivity() {
     private var runScenario2 = true
     private var runScenario3 = true
     private var runScenario4 = true
-    
+    private var isTestNormalCallMode: Boolean = false
+
+
     // Current phase: 1 = Home Carrier, 2 = Visitor Carrier
     private var currentPhase = 1
     private var currentMeasurementCount = 0
@@ -312,8 +316,10 @@ class MainActivity : AppCompatActivity() {
         checkScenario4 = findViewById(R.id.checkScenario4)
         btnStartExperiment = findViewById(R.id.btnStartExperiment)
         btnStopExperiment = findViewById(R.id.btnStopExperiment)
+        btnTestNormalCall = findViewById(R.id.btnTestNormalCall)
 
-        
+
+
         // Setup experiments spinner (1-10)
         val experimentOptions = (1..10).toList()
         val spinnerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, experimentOptions)
@@ -357,13 +363,53 @@ class MainActivity : AppCompatActivity() {
                 runScenario2 = checkScenario2.isChecked
                 runScenario3 = checkScenario3.isChecked
                 runScenario4 = checkScenario4.isChecked
-                
+                isTestNormalCallMode = false
+                if (runScenario3 && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "WiFi Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: WiFi Calling number is emergency-like: '${normalizeDialNumber(wifiCallingNumber)}'")
+                    return@setOnClickListener
+                }
+
+
                 startFullCollection()
             } else {
                 requestPermissions()
             }
         }
-        
+
+        btnTestNormalCall.setOnClickListener {
+            if (checkPermissions()) {
+                // Update config from UI
+                experimentsPerScenario = spinnerExperimentsCount.selectedItem as Int
+                totalMeasurementsPerPhase = experimentsPerScenario
+                wifiCallingNumber = editWifiCallingNumber.text.toString()
+
+                runScenario1 = checkScenario1.isChecked
+                runScenario2 = false // ✅ Test mode ignores Scenario 2
+                runScenario3 = checkScenario3.isChecked
+                runScenario4 = checkScenario4.isChecked
+
+                // Scenario 1 test needs WiFi Calling number (normal CALL)
+                if (runScenario1 && wifiCallingNumber.isBlank()) {
+                    Toast.makeText(this, "Please input WiFi Calling number for Scenario #1 normal call test", Toast.LENGTH_LONG).show()
+                    appendLog("Test mode aborted: Scenario #1 checked but WiFi Calling number is empty")
+                    return@setOnClickListener
+                }
+                if ((runScenario1 || runScenario3) && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "Test blocked: WiFi Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Test blocked: WiFi Calling number is emergency-like: '${normalizeDialNumber(wifiCallingNumber)}'")
+                    return@setOnClickListener
+                }
+
+
+                isTestNormalCallMode = true
+                startFullCollection()
+            } else {
+                requestPermissions()
+            }
+        }
+
+
         btnStopExperiment.setOnClickListener {
             stopCollection()
         }
@@ -517,6 +563,8 @@ class MainActivity : AppCompatActivity() {
 
         btnStartExperiment.isEnabled = false
         btnStopExperiment.isEnabled = true
+        btnTestNormalCall.isEnabled = false
+
         setInputsEnabled(false)
         
         appendLog("=== Starting Full Collection ===")
@@ -858,7 +906,12 @@ class MainActivity : AppCompatActivity() {
 
                 // Make the call
                 appendLog("Dialing...")
-                makeCall()
+                if (isTestNormalCallMode && currentPhase == 1) {
+                    makeNormalCallToWifiCallingNumberForTestScenario1()
+                } else {
+                    makeCall()
+                }
+
 
                 // Wait for blocker to intercept, then hang up immediately
                 appendLog("Waiting for call to be blocked...")
@@ -1328,15 +1381,23 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             btnStartExperiment.isEnabled = true
             btnStopExperiment.isEnabled = false
+            btnTestNormalCall.isEnabled = true
+
             setInputsEnabled(true)
         }
     }
-    
+
     private fun setInputsEnabled(enabled: Boolean) {
-        //editDialNumber.isEnabled = enabled
         btnRefreshGps.isEnabled = enabled
+        editWifiCallingNumber.isEnabled = enabled
+        spinnerExperimentsCount.isEnabled = enabled
+        checkScenario1.isEnabled = enabled
+        checkScenario2.isEnabled = enabled
+        checkScenario3.isEnabled = enabled
+        checkScenario4.isEnabled = enabled
     }
-    
+
+
     // ===== SIM Control =====
     
     /**
@@ -1484,7 +1545,41 @@ class MainActivity : AppCompatActivity() {
     }
     
     // ===== Call Functions =====
-    
+
+    private fun normalizeDialNumber(s: String): String {
+        return s.trim().filter { it.isDigit() }
+    }
+
+    private fun isEmergencyLikeNumber(s: String): Boolean {
+        val n = normalizeDialNumber(s)
+        return n in setOf("911", "112", "110", "119", "999")
+    }
+
+    private fun makeNormalCallToWifiCallingNumberForTestScenario1() {
+        val numberToCall = wifiCallingNumber.trim()
+        appendLog("TEST MODE: Scenario 1 normal CALL to: $numberToCall")
+
+        try {
+            Log.d("DataCollector", "=== START_DIALING_TEST_NORMAL: $numberToCall (Scenario 1) ===")
+            val cmd = "am start -a android.intent.action.CALL -d tel:$numberToCall"
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val exitCode = process.waitFor()
+
+            if (exitCode == 0) {
+                Log.d("DataCollector", "=== START_DIALING_TEST_NORMAL: Dialed ===")
+                appendLog("Test normal CALL command sent successfully")
+            } else {
+                Log.d("DataCollector", "=== START_DIALING_TEST_NORMAL: ERROR ===")
+                appendLog("Test normal CALL failed (exit: $exitCode). Falling back to Intent...")
+                fallbackCallWithIntent(numberToCall)
+            }
+        } catch (e: Exception) {
+            appendLog("Test normal CALL error: ${e.message}. Falling back to Intent...")
+            fallbackCallWithIntent(numberToCall)
+        }
+    }
+
+
     private fun makeCall() {
         // Scenario 3 uses WiFi Calling number, other use emergency number
         val numberToCall = if (currentPhase == 3 && wifiCallingNumber.isNotEmpty()) {

@@ -180,7 +180,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="emc w/ SIM"
+                android:text="#1: emc w/ SIM"
                 android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
@@ -190,7 +190,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="emc w/o SIM"
+                android:text="#2: emc w/o SIM"
                 android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
@@ -208,7 +208,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="WiFi Calling"
+                android:text="#3: WiFi Calling"
                 android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
@@ -218,7 +218,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Satellite"
+                android:text="#4: Satellite SOS"
                 android:textColor="#000000"
                 android:textSize="13sp"
                 android:checked="true" />
@@ -244,16 +244,28 @@
                 android:id="@+id/spinnerExperimentsCount"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
+                android:textColor="#000000"
                 android:popupBackground="#000000"
                 android:padding="4dp" />
         </LinearLayout>
 
         <!-- Control Buttons -->
         <Button
+            android:id="@+id/btnTestNormalCall"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:text="Test w/ Normal Call"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#4CAF50"
+            android:layout_marginBottom="8dp" />
+
+        <Button
             android:id="@+id/btnStartExperiment"
             android:layout_width="match_parent"
             android:layout_height="60dp"
-            android:text="START EXPERIMENT"
+            android:text="START EXPERIMENTS"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="#FFFFFF"
@@ -264,7 +276,7 @@
             android:id="@+id/btnStopExperiment"
             android:layout_width="match_parent"
             android:layout_height="48dp"
-            android:text="STOP EXPERIMENT"
+            android:text="STOP EXPERIMENTS"
             android:textSize="14sp"
             android:textColor="#FFFFFF"
             android:backgroundTint="#2196F3"
