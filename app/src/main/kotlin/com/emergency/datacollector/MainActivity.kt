@@ -1247,138 +1247,48 @@ class MainActivity : AppCompatActivity() {
 
 
     private fun monitorSatelliteConnected(callback: (Boolean) -> Unit) {
-        appendLog("Monitoring satellite connection (timeout: 5 minutes)...")
+        appendLog("Starting satellite monitoring service (timeout: 5 minutes)...")
 
-        val startTime = System.currentTimeMillis()
-        val timeoutMillis = 5 * 60 * 1000L  // 5 minutes
-        val checkIntervalMillis = 60_000L   // Check every 60 seconds
+        // ✅ 確保舊的Service已停止（防止重複啟動）
+        SatelliteMonitorService.stop(this)
 
-        var isMonitoring = true
-        var lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
-        var lastPollDoneLogMs = 0L
+        // ✅ 等待100ms確保舊Service完全停止
+        handler.postDelayed({
+            // 使用 Foreground Service 進行監控
+            SatelliteMonitorService.start(this) { foundKeyword ->
+                handler.post {
+                    val reason = if (foundKeyword) "Satellite connected" else "Timeout reached"
+                    appendLog("Satellite monitoring stopped: $reason")
 
-        // Function to stop monitoring and cleanup
-        fun stopMonitoring(foundKeyword: Boolean) {
-            if (!isMonitoring) return
-            isMonitoring = false
+                    // ✅ 保持原有的等待邏輯：只有在成功連接且未停止時才等待1分鐘
+                    val waitMs = if (shouldStop || !foundKeyword) 0L else 60000L
+                    if (waitMs > 0) appendLog("Waiting 1 minute before proceeding...")
 
-            val reason = if (foundKeyword) "Satellite connected" else "Timeout reached (5 minutes)"
-            appendLog("Satellite monitoring stopped: $reason")
-
-            // Force stop Stargate app
-            appendLog("Force stopping Stargate app...")
-            try {
-                val cmd = "am force-stop com.google.android.apps.stargate"
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-                val exitCode = process.waitFor()
-
-                if (exitCode == 0) {
-                    appendLog("Stargate app force-stopped successfully")
-                } else {
-                    appendLog("Warning: Force-stop exit code: $exitCode")
-                }
-            } catch (e: Exception) {
-                appendLog("Force-stop error: ${e.message}")
-            }
-
-            val waitMs = if (shouldStop) 0L else 60000L
-            if (!shouldStop) appendLog("Waiting 1 minute before proceeding...")
-            handler.postDelayed({
-                appendLog("Satellite connection monitoring complete")
-                callback(foundKeyword)
-            }, waitMs)
-
-        }
-
-        // Function to check logcat periodically
-        fun checkLogcat() {
-            if (!isMonitoring) return
-
-            if (shouldStop || !isCollectionRunning) {
-                appendLog("Stop requested. Aborting satellite monitoring...")
-                stopMonitoring(false)
-                return
-            }
-
-            // Check if timeout reached
-            val elapsedTime = System.currentTimeMillis() - startTime
-            if (elapsedTime >= timeoutMillis) {
-                appendLog("Satellite monitoring timeout reached (5 minutes)")
-                stopMonitoring(false)
-                return
-            }
-
-            // Check logcat for keyword in background thread
-            thread {
-                try {
-                    // Use -T (time filter) to only read logs since last check
-                    // Use -e (regex) to filter for our patterns
-                    // This is much more efficient and won't miss logs
-                    val cmd = "logcat -T '$lastCheckTime' -d -e 'SATELLITE_MODEM_STATE_CONNECTED|Entering ConnectedState'"
-                    val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
-                    val reader = process.inputStream.bufferedReader()
-                    val logcatOutput = reader.readText()
-                    reader.close()
-                    process.waitFor()
-                    appendLog("Logcat poll done, len=${logcatOutput.length}")
-
-
-                    // Update last check time for next iteration
-                    lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date(System.currentTimeMillis() - 500))
-
-                    // Check if we found the satellite connection indicators
-                    if (logcatOutput.contains("SATELLITE_MODEM_STATE_CONNECTED") ||
-                        logcatOutput.contains("Entering ConnectedState")) {
-                        handler.post {
-                            if (isMonitoring) {
-                                appendLog("Satellite connection detected in logcat!")
-                                val matchedLine = logcatOutput.lines().firstOrNull {
-                                    it.contains("SATELLITE_MODEM_STATE_CONNECTED") ||
-                                            it.contains("Entering ConnectedState")
-                                }
-                                if (matchedLine != null) {
-                                    appendLog("Match: ${matchedLine.take(150)}")
-                                }
-                                stopMonitoring(true)
-                            }
-                        }
-                        return@thread
-                    }
-
-                    // Schedule next check
                     handler.postDelayed({
-                        if (isMonitoring) {
-                            checkLogcat()
-                        }
-                    }, checkIntervalMillis)
-
-                } catch (e: Exception) {
-                    handler.post {
-                        appendLog("Logcat check error: ${e.message}")
-                        // Continue monitoring despite error
-                        handler.postDelayed({
-                            if (isMonitoring) {
-                                checkLogcat()
-                            }
-                        }, checkIntervalMillis)
-                    }
+                        appendLog("Satellite connection monitoring complete")
+                        callback(foundKeyword)
+                    }, waitMs)
                 }
             }
-        }
-
-        // Start monitoring
-        checkLogcat()
+        }, 100)
     }
+
 
     private fun stopCollection() {
         shouldStop = true
         appendLog("Stopping collection...")
-        // updateProgress("Stopping...")
+
+        // ✅ 停止 satellite monitoring service
+        SatelliteMonitorService.stop(this)
     }
-    
+
+
     private fun finishCollection(message: String) {
         isCollectionRunning = false
-        
+
+        // ✅ 確保 service 被停止（雙重保險）
+        SatelliteMonitorService.stop(this)
+
         // Ensure phone app is killed
         appendLog("Killing phone app on exit...")
         sendFridaCommand("/pkill-phone") { _ ->
@@ -1388,23 +1298,22 @@ class MainActivity : AppCompatActivity() {
                 }
             }, 500)
         }
-        
+
         // restoring setting
         appendLog("Restoring settings...")
         enableSim()
         disableWifiCalling()
-        
-        // updateProgress(message)
+
         appendLog("=== $message ===")
-        
+
         runOnUiThread {
             btnStartExperiment.isEnabled = true
             btnStopExperiment.isEnabled = false
             btnTestNormalCall.isEnabled = true
-
             setInputsEnabled(true)
         }
     }
+
 
     private fun setInputsEnabled(enabled: Boolean) {
         btnRefreshGps.isEnabled = enabled
