@@ -2,6 +2,11 @@ Java.perform(function() {
     // Get Android Log class for logcat output
     var Log = Java.use("android.util.Log");
     var TAG = "frida-cs-call-blocker";
+
+    // Helper function to output debug log to logcat
+    function logInfo(message) {
+        Log.i(TAG, message);
+    }
     
     // Timestamp helper function
     function getTimestamp() {
@@ -14,6 +19,7 @@ Java.perform(function() {
         var milliseconds = String(now.getMilliseconds()).padStart(3, '0');
         return month + "-" + day + " " + hours + ":" + minutes + ":" + seconds + "." + milliseconds;
     }
+    
     function reportReady(id) {
         console.log("FRIDA_READY:" + id);
     }
@@ -22,19 +28,14 @@ Java.perform(function() {
         var msg = (e && e.stack) ? e.stack : ("" + e);
         console.log("FRIDA_ERROR:" + id + ":" + msg);
     }
-    // Helper function to output debug log to logcat
-    function logDebug(message) {
-        Log.d(TAG, message);
-    }
 
-    console.log("[*] Searching for CommandsInterface implementation via ClassLoaders...");
-    logDebug("Frida CS call blocker script started");
+    logInfo("Frida CS call blocker script started");
     
     var foundImplementation = false;
     
     // Start periodic alive message
     var aliveInterval = setInterval(function() {
-        logDebug("cs-call-blocker is alive and wait.");
+        logInfo("cs-call-blocker is alive and wait.");
     }, 1000); // Every 1 second
     
     Java.enumerateClassLoaders({
@@ -43,7 +44,6 @@ Java.perform(function() {
                 // Try to find CommandsInterface in this loader
                 if (loader.findClass("com.android.internal.telephony.CommandsInterface")) {
                     console.log("[+] Found CommandsInterface in loader: " + loader);
-                    logDebug("Found CommandsInterface in loader");
                     
                     // Now search for implementation classes
                     var implClasses = [
@@ -56,7 +56,6 @@ Java.perform(function() {
                         try {
                             if (loader.findClass(implClassName)) {
                                 console.log("[+] Found implementation: " + implClassName);
-                                logDebug("Found implementation: " + implClassName);
                                 
                                 // Set this loader as the default
                                 Java.classFactory.loader = loader;
@@ -76,8 +75,8 @@ Java.perform(function() {
         },
         onComplete: function() {
             if (!foundImplementation) {
+                logInfo("No CommandsInterface implementation found");
                 console.log("[-] No CommandsInterface implementation found");
-                logDebug("No CommandsInterface implementation found");
                 reportError("pixel9_void_gsm_dial", "No CommandsInterface implementation found");
                 
                 // Clear the alive interval if no implementation found
@@ -85,8 +84,8 @@ Java.perform(function() {
                     clearInterval(aliveInterval);
                 }
             } else {
+                logInfo("Successfully hooked CommandsInterface implementations - ready to block CS calls");
                 console.log("[+] Successfully hooked CommandsInterface implementations");
-                logDebug("Successfully hooked CommandsInterface implementations - ready to block CS calls");
                 reportReady("pixel9_void_gsm_dial");
             }
         }
@@ -96,15 +95,19 @@ Java.perform(function() {
         try {
             var ImplClass = Java.use(className);
             
+            logInfo("Hooking dial() methods in: " + className);
             console.log("[*] Hooking dial() methods in: " + className);
-            logDebug("Hooking dial() methods in: " + className);
             
             // Hook all dial overloads
             ImplClass.dial.overloads.forEach(function(overload, idx) {
                 console.log("[*] Hooking overload #" + idx + " with " + overload.argumentTypes.length + " params");
-                logDebug("Hooking overload #" + idx + " with " + overload.argumentTypes.length + " params");
                 
                 overload.implementation = function() {
+                    // Output to logcat
+                    logInfo("Outgoing CS call blocked!");
+                    if (arguments.length > 0) logInfo("Address: " + arguments[0]);
+                    if (arguments.length > 1) logInfo("Is Emergency: " + arguments[1]);
+
                     var timestamp = getTimestamp();
                     
                     // Output to console
@@ -117,26 +120,16 @@ Java.perform(function() {
                     if (arguments.length > 2) console.log(timestamp + " [!] Emergency Info: " + arguments[2]);
                     
                     console.log(timestamp + " [+] Call blocked - voided");
-                    
-                    // Output to logcat
-                    logDebug("Outgoing CS call blocked!");
-                    logDebug("Class: " + className + " overload #" + idx);
-                    logDebug("Arguments: " + arguments.length);
-                    if (arguments.length > 0) logDebug("Address: " + arguments[0]);
-                    if (arguments.length > 1) logDebug("Is Emergency: " + arguments[1]);
-                    if (arguments.length > 2) logDebug("Emergency Info: " + arguments[2]);
-                    
                     // Void the function
                     return;
                 };
             });
             
+            logInfo("Successfully hooked all dial() overloads in " + className);
             console.log("[+] Successfully hooked all dial() overloads in " + className);
-            logDebug("Successfully hooked all dial() overloads in " + className);
-            
         } catch(e) {
+            logInfo("Failed to hook " + className + ": " + e);
             console.log("[-] Failed to hook " + className + ": " + e);
-            logDebug("Failed to hook " + className + ": " + e);
         }
     }
 });
