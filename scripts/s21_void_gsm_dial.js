@@ -1,5 +1,24 @@
 Java.perform(function() {
-    console.log("[*] Searching for CommandsInterface implementation via ClassLoaders...");
+    // Get Android Log class for logcat output
+    var Log = Java.use("android.util.Log");
+    var TAG = "frida-cs-call-blocker";
+
+    // Helper function to output debug log to logcat
+    function logInfo(message) {
+        Log.i(TAG, message);
+    }
+
+    // Timestamp helper function
+    function getTimestamp() {
+        var now = new Date();
+        var month = String(now.getMonth() + 1).padStart(2, '0');
+        var day = String(now.getDate()).padStart(2, '0');
+        var hours = String(now.getHours()).padStart(2, '0');
+        var minutes = String(now.getMinutes()).padStart(2, '0');
+        var seconds = String(now.getSeconds()).padStart(2, '0');
+        var milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+        return month + "-" + day + " " + hours + ":" + minutes + ":" + seconds + "." + milliseconds;
+    }
     
     function reportReady(id) {
         console.log("FRIDA_READY:" + id);
@@ -10,8 +29,14 @@ Java.perform(function() {
         console.log("FRIDA_ERROR:" + id + ":" + msg);
     }
 
+    logInfo("Frida CS call blocker script started");
 
     var foundImplementation = false;
+
+    // Start periodic alive message
+    var aliveInterval = setInterval(function() {
+        logInfo("cs-call-blocker is alive and wait.");
+    }, 1000); // Every 1 second
     
     Java.enumerateClassLoaders({
         onMatch: function(loader) {
@@ -50,10 +75,16 @@ Java.perform(function() {
         },
         onComplete: function() {
             if (!foundImplementation) {
+                logInfo("No CommandsInterface implementation found");
                 console.log("[-] No CommandsInterface implementation found");
                 reportError("s21_void_gsm_dial", "CommandsInterface implementation not found");
 
+                // Clear the alive interval if no implementation found
+                if (aliveInterval) {
+                    clearInterval(aliveInterval);
+                }
             } else {
+                logInfo("Successfully hooked CommandsInterface implementations - ready to block CS calls");
                 console.log("[+] Successfully hooked CommandsInterface implementations");
                 reportReady("s21_void_gsm_dial");
             }
@@ -64,6 +95,7 @@ Java.perform(function() {
         try {
             var ImplClass = Java.use(className);
             
+            logInfo("Hooking dial() methods in: " + className);
             console.log("[*] Hooking dial() methods in: " + className);
             
             // Hook all dial overloads
@@ -71,24 +103,33 @@ Java.perform(function() {
                 console.log("[*] Hooking overload #" + idx + " with " + overload.argumentTypes.length + " params");
                 
                 overload.implementation = function() {
-                    console.log("[!] ===== BLOCKED: " + className + ".dial() overload #" + idx + " =====");
-                    console.log("[!] Arguments: " + arguments.length);
+                    // Output to logcat
+                    logInfo("Outgoing CS call blocked!");
+                    if (arguments.length > 0) logInfo("Address: " + arguments[0]);
+                    if (arguments.length > 1) logInfo("Is Emergency: " + arguments[1]);
+                    
+                    var timestamp = getTimestamp();
+                    
+                    // Output to console
+                    console.log(timestamp + " [!] ===== BLOCKED: " + className + ".dial() overload #" + idx + " =====");
+                    console.log(timestamp + " [!] Arguments: " + arguments.length);
                     
                     // Log important arguments
-                    if (arguments.length > 0) console.log("[!] Address: " + arguments[0]);
-                    if (arguments.length > 1) console.log("[!] Is Emergency: " + arguments[1]);
-                    if (arguments.length > 2) console.log("[!] Emergency Info: " + arguments[2]);
+                    if (arguments.length > 0) console.log(timestamp + " [!] Address: " + arguments[0]);
+                    if (arguments.length > 1) console.log(timestamp + " [!] Is Emergency: " + arguments[1]);
+                    if (arguments.length > 2) console.log(timestamp + " [!] Emergency Info: " + arguments[2]);
                     
-                    console.log("[+] Call blocked - voided");
+                    console.log(timestamp + " [+] Call blocked - voided");
                     
                     // Void the function
                     return;
                 };
             });
             
-            console.log("[+] Successfully hooked all dial() overloads in " + className);
-            
+            logInfo("Successfully hooked all dial() overloads in " + className);
+            console.log("[+] Successfully hooked all dial() overloads in " + className); 
         } catch(e) {
+            logInfo("Failed to hook " + className + ": " + e);
             console.log("[-] Failed to hook " + className + ": " + e);
         }
     }
