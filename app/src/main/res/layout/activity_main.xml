@@ -8,94 +8,90 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="@dimen/screen_padding">
 
-        <!-- Configuration Section -->
-        <TextView
-            android:layout_width="wrap_content"
+        <!-- Configuration Section with File Size Info -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Configuration"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:textColor="#000000"
-            android:layout_marginBottom="8dp" />
+            android:orientation="horizontal"
+            android:layout_marginBottom="@dimen/section_gap"
+            android:gravity="center_vertical">
+
+
+        <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Configuration"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#000000" />
+
+            <TextView
+                android:id="@+id/txtFileSize"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Total log size: 0.00 MB"
+                android:textSize="14sp"
+                android:textColor="#888888"
+                android:layout_marginStart="@dimen/label_end" />
+
+        </LinearLayout>
 
         <!-- Country Code Row -->
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            style="@style/RowContainer">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Country:"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:layout_marginEnd="8dp" />
+                style="@style/RowLabel"
+                android:text="Country:" />
 
             <TextView
                 android:id="@+id/txtCountryCode"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="--"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:padding="8dp" />
+                style="@style/RowValueNormal"
+                android:text="--" />
         </LinearLayout>
 
-        <!-- MCC+MNC Row -->
+        <!-- MCC+MNC Row with Update Button -->
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            style="@style/RowContainer">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="MCC+MNC:"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:layout_marginEnd="8dp" />
+                style="@style/RowLabel"
+                android:text="MCC+MNC:" />
 
             <TextView
                 android:id="@+id/txtMccMnc"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="000000"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:padding="8dp" />
+                style="@style/RowValueNormal"
+                android:text="000000" />
+
+            <Button
+                android:id="@+id/btnUpdateMccMnc"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:minHeight="32dp"
+                android:text="Update"
+                android:textSize="12sp"
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#F44336"
+                android:minWidth="48dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp" />
         </LinearLayout>
 
         <!-- GPS Location Row -->
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            style="@style/RowContainer">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Location:"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:layout_marginEnd="8dp" />
+                style="@style/RowLabel"
+                android:text="Location:" />
 
             <TextView
                 android:id="@+id/txtLocation"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Getting GPS..."
-                android:textColor="#000000"
-                android:textSize="12sp"
-                android:padding="8dp" />
+                style="@style/RowValueSmall"
+                android:text="Getting GPS..." />
 
             <Button
                 android:id="@+id/btnRefreshGps"
@@ -103,49 +99,31 @@
                 android:layout_height="wrap_content"
                 android:text="📍"
                 android:textSize="16sp"
+                android:minHeight="24dp"
                 android:minWidth="48dp" />
         </LinearLayout>
 
         <!-- Emergency Number Row (Display Only) -->
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            style="@style/RowContainer">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Emergency Number:"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:layout_marginEnd="8dp" />
+                style="@style/RowLabel"
+                android:text="Emergency Number:" />
 
             <TextView
                 android:id="@+id/txtEmergencyNumber"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/emergency_number"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:padding="8dp" />
+                style="@style/RowValueNormal"
+                android:text="@string/emergency_number" />
         </LinearLayout>
 
         <!-- WiFi Calling Number Row (User Input) -->
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            style="@style/RowContainer">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="WiFi Calling Number:"
-                android:textColor="#000000"
-                android:textSize="14sp"
-                android:layout_marginEnd="8dp" />
+                style="@style/RowLabel"
+                android:text="WiFi Calling Number:" />
 
             <EditText
                 android:id="@+id/editWifiCallingNumber"
@@ -153,9 +131,10 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:hint="For scenario #3"
-                android:textColor="#000000"
                 android:inputType="phone"
-                android:padding="8dp"
+                android:textColor="#000000"
+                android:paddingVertical="@dimen/value_pad_v"
+                android:paddingHorizontal="@dimen/value_pad_h"
                 android:background="@android:drawable/edit_text" />
         </LinearLayout>
 
@@ -166,14 +145,14 @@
             android:text="Scenarios:"
             android:textColor="#000000"
             android:textSize="14sp"
-            android:layout_marginBottom="4dp" />
+            android:layout_marginBottom="@dimen/row_spacing" />
 
         <!-- Row 1: SIM and No SIM -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="4dp">
+            android:layout_marginBottom="@dimen/checkbox_row_spacing">
 
             <CheckBox
                 android:id="@+id/checkScenario1"
@@ -201,9 +180,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="12dp">
+            android:layout_marginBottom="@dimen/section_gap">
 
-            <CheckBox
+        <CheckBox
                 android:id="@+id/checkScenario3"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -229,7 +208,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="16dp"
+            android:layout_marginBottom="@dimen/section_gap"
             android:gravity="center_vertical">
 
             <TextView
@@ -238,50 +217,49 @@
                 android:text="# of experiments per scenario:"
                 android:textColor="#000000"
                 android:textSize="14sp"
-                android:layout_marginEnd="8dp" />
+                android:layout_marginEnd="@dimen/label_end" />
 
             <Spinner
                 android:id="@+id/spinnerExperimentsCount"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
-                android:textColor="#000000"
-                android:popupBackground="#000000"
-                android:padding="4dp" />
+                android:paddingVertical="@dimen/value_pad_v"
+                android:paddingHorizontal="@dimen/value_pad_h" />
         </LinearLayout>
 
         <!-- Control Buttons -->
         <Button
             android:id="@+id/btnTestNormalCall"
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="@dimen/btn_h_small"
             android:text="Test w/ Normal Call"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="#FFFFFF"
             android:backgroundTint="#4CAF50"
-            android:layout_marginBottom="8dp" />
+            android:layout_marginBottom="@dimen/button_spacing" />
 
         <Button
             android:id="@+id/btnStartExperiment"
             android:layout_width="match_parent"
-            android:layout_height="60dp"
+            android:layout_height="@dimen/btn_h_large"
             android:text="START EXPERIMENTS"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="#FFFFFF"
             android:backgroundTint="#2196F3"
-            android:layout_marginBottom="8dp" />
+            android:layout_marginBottom="@dimen/button_spacing" />
 
         <Button
             android:id="@+id/btnStopExperiment"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
+            android:layout_height="@dimen/btn_h_medium"
             android:text="STOP EXPERIMENTS"
             android:textSize="14sp"
             android:textColor="#FFFFFF"
             android:backgroundTint="#2196F3"
             android:enabled="false"
-            android:layout_marginBottom="16dp" />
+            android:layout_marginBottom="@dimen/section_gap" />
 
         <!-- Hidden fields for compatibility -->
         <TextView
@@ -310,7 +288,7 @@
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="#333333"
-            android:layout_marginBottom="8dp" />
+            android:layout_marginBottom="@dimen/row_spacing" />
 
         <TextView
             android:id="@+id/infoTextView"
