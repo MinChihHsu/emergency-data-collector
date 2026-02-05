@@ -363,7 +363,7 @@ def start_scat(modem_type, filename):
         )
         print(f"scat started (PID: {scat_process.pid})")
 
-        # Wait a moment to check if process started successfully
+        # Step 1: Wait a moment to check if process started successfully
         time.sleep(1.0)
         if scat_process.poll() is not None:
             # Process already terminated - something went wrong
@@ -371,11 +371,33 @@ def start_scat(modem_type, filename):
             print(f"ERROR: scat terminated immediately! stderr: {stderr}")
             return False, f"scat failed to start: {stderr}"
 
-        # Wait additional time for scat to stabilize and start capturing
-        print("Waiting for scat to stabilize...")
-        time.sleep(2)  # Give scat time to actually start recording
+        # Step 2: Wait additional time for scat to stabilize
+        print("Waiting for scat to stabilize (2s)...")
+        time.sleep(2)
+        
+        # Step 3: Check if PID is still alive after stabilization
+        if scat_process.poll() is not None:
+            stderr = scat_process.stderr.read().decode() if scat_process.stderr else ""
+            print(f"ERROR: scat died during initialization! stderr: {stderr}")
+            return False, f"scat died during initialization: {stderr}"
+        
+        # Step 4: Additional wait and PID check (catch late crashes)
+        print("Additional stability check (1.5s)...")
+        time.sleep(1.5)
+        
+        if scat_process.poll() is not None:
+            stderr = scat_process.stderr.read().decode() if scat_process.stderr else ""
+            print(f"ERROR: scat crashed after initialization! stderr: {stderr}")
+            return False, f"scat crashed after initialization: {stderr}"
+        
+        # Step 5: Verify output file was created (optional but good indicator)
+        if os.path.exists(output_file):
+            file_size = os.path.getsize(output_file)
+            print(f"Output file created: {output_file} ({file_size} bytes)")
+        else:
+            print(f"Note: Output file not yet created (may be normal if no data yet)")
 
-        print(f"scat running and ready (PID: {scat_process.pid})")
+        print(f"scat running and stable (PID: {scat_process.pid})")
         return True, f"scat started, output: {output_file}"
     except Exception as e:
         print(f"Error starting scat: {e}")
