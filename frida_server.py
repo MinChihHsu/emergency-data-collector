@@ -475,6 +475,9 @@ def wait_for_block():
     end_time = time.monotonic() + timeout_s
     print(f"Waiting for BLOCKED marker (timeout: {timeout_s}s)...")
     
+    # Buffer for each process to accumulate partial reads
+    proc_buffers = {id(proc): b"" for proc in frida_processes}
+    
     while time.monotonic() < end_time:
         for proc in frida_processes:
             if proc.stdout is None:
@@ -482,26 +485,50 @@ def wait_for_block():
             if proc.poll() is not None:
                 continue  # Process dead
             
+            fd = proc.stdout.fileno()
+            
             # Non-blocking read with short timeout
-            rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+            try:
+                rlist, _, _ = select.select([fd], [], [], 0.1)
+            except (ValueError, OSError):
+                # fd might be closed or invalid
+                continue
+                
             if rlist:
                 try:
-                    line_bytes = proc.stdout.readline()
-                    if line_bytes:
-                        # Decode bytes to string (stdout is in binary mode)
-                        line = line_bytes.decode('utf-8', errors='replace').rstrip()
-                        # Check for BLOCKED marker
-                        if "BLOCKED:" in line:
-                            print(f"*** CALL BLOCKED: {line}")
-                            return jsonify({
-                                "status": "ok",
-                                "message": "Call blocked by Frida",
-                                "blocked": True,
-                                "detail": line
-                            }), 200
+                    # Use os.read() for non-blocking fd (readline() doesn't work well with non-blocking)
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        continue
+                    
+                    # Accumulate in buffer
+                    proc_buffers[id(proc)] += chunk
+                    
+                    # Check if buffer contains BLOCKED marker
+                    buf_str = proc_buffers[id(proc)].decode('utf-8', errors='replace')
+                    if "BLOCKED:" in buf_str:
+                        # Extract the line containing BLOCKED:
+                        for line in buf_str.split('\n'):
+                            if "BLOCKED:" in line:
+                                print(f"*** CALL BLOCKED: {line.strip()}")
+                                return jsonify({
+                                    "status": "ok",
+                                    "message": "Call blocked by Frida",
+                                    "blocked": True,
+                                    "detail": line.strip()
+                                }), 200
+                    
+                    # Prevent unbounded growth - keep last 50KB
+                    if len(proc_buffers[id(proc)]) > 50000:
+                        proc_buffers[id(proc)] = proc_buffers[id(proc)][-25000:]
+                        
+                except BlockingIOError:
+                    # No data available right now
+                    continue
                 except Exception as e:
+                    # Log but don't crash - process might have closed
                     print(f"Error reading Frida output: {e}")
-                    pass
+                    continue
         
         time.sleep(0.05)  # Small sleep to prevent CPU spin
     

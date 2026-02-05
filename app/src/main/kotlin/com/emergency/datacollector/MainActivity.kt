@@ -633,7 +633,7 @@ class MainActivity : AppCompatActivity() {
             }
             
             when (firstPhase) {
-                1 -> startPhase1Measurements()
+                1 -> startPhase1()
                 2 -> startPhase2()
                 3 -> startPhase3()
                 4 -> startPhase4()
@@ -823,7 +823,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startPhase1Measurements() {
+    private fun startPhase1() {
         appendLog("\n=== Scenario 1: Home Carrier (SIM Enabled, WiFi Disabled) ===")
         
         // Scenario #1: Enable SIM slot 0 and disable WiFi connection
@@ -984,35 +984,29 @@ class MainActivity : AppCompatActivity() {
 
                             // Function to proceed after capturing logs
                             val proceedToNext: () -> Unit = {
-                                // Kill phone app (final cleanup)
-                                appendLog("Killing phone app (final)...")
-                                sendFridaCommand("/pkill-phone") { _ ->
-                                    sendFridaCommand("/pkill-phone") { _ ->
-                                        appendLog("Phone app killed")
-                                        
-                                        // Next measurement or next scenario
-                                        handler.postDelayed({
-                                            if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+                                appendLog("Proceeding to next measurement...")
+                                
+                                // Next measurement or next scenario
+                                handler.postDelayed({
+                                    if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
 
-                                            if (currentMeasurementCount < totalMeasurementsPerPhase) {
-                                                performMeasurement()
-                                            } else {
-                                                appendLog("Scenario $currentPhase Complete!")
-                                                val nextPhase = getNextEnabledPhase(currentPhase)
-                                                if (nextPhase != null) {
-                                                    when (nextPhase) {
-                                                        1 -> startPhase1Measurements()
-                                                        2 -> startPhase2()
-                                                        3 -> startPhase3()
-                                                        4 -> startPhase4()
-                                                    }
-                                                } else {
-                                                    finishCollection("All measurements complete!")
-                                                }
+                                    if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                        performMeasurement()
+                                    } else {
+                                        appendLog("Scenario $currentPhase Complete!")
+                                        val nextPhase = getNextEnabledPhase(currentPhase)
+                                        if (nextPhase != null) {
+                                            when (nextPhase) {
+                                                1 -> startPhase1()
+                                                2 -> startPhase2()
+                                                3 -> startPhase3()
+                                                4 -> startPhase4()
                                             }
-                                        }, delayBetweenCalls)
+                                        } else {
+                                            finishCollection("All measurements complete!")
+                                        }
                                     }
-                                }
+                                }, delayBetweenCalls)
                             }
 
                             // Function to capture logcat
@@ -1129,7 +1123,7 @@ class MainActivity : AppCompatActivity() {
                                                 val nextPhase = getNextEnabledPhase(currentPhase)
                                                 if (nextPhase != null) {
                                                     when (nextPhase) {
-                                                        1 -> startPhase1Measurements()
+                                                        1 -> startPhase1()
                                                         2 -> startPhase2()
                                                         3 -> startPhase3()
                                                         4 -> startPhase4()
@@ -1176,7 +1170,7 @@ class MainActivity : AppCompatActivity() {
                                                                         val nextPhase = getNextEnabledPhase(currentPhase)
                                                                         if (nextPhase != null) {
                                                                             when (nextPhase) {
-                                                                                1 -> startPhase1Measurements()
+                                                                                1 -> startPhase1()
                                                                                 2 -> startPhase2()
                                                                                 3 -> startPhase3()
                                                                                 4 -> startPhase4()
