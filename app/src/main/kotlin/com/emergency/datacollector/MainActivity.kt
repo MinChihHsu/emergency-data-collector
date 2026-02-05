@@ -1337,18 +1337,25 @@ class MainActivity : AppCompatActivity() {
             // S25 series
             modelName.contains("SM-S93", ignoreCase = true) -> 185
             // S24 series
-            modelName.contains("SM-S92", ignoreCase = true) -> 185
+            modelName.contains("SM-S92", ignoreCase = true) -> 186
+            // NOT TESTED
             // S23 series
             modelName.contains("SM-S91", ignoreCase = true) -> 185
+            // NOT TESTED
             // S22 series
             modelName.contains("SM-S90", ignoreCase = true) -> 193
             // S21 series
             modelName.contains("SM-G99", ignoreCase = true) -> 193
+            // NOT TESTED
             // S20 series
             modelName.contains("SM-G98", ignoreCase = true) -> 193
             // Pixel 10
-            modelName.contains("Pixel", ignoreCase = true) -> 185
-            // Default to S21 code
+            modelName.contains("Pixel 10", ignoreCase = true) -> 185
+            // Pixel 9
+            modelName.contains("Pixel 9", ignoreCase = true) -> 185
+            // Pixel 7
+            modelName.contains("Pixel 7", ignoreCase = true) -> 182
+            // For other models, default to S21 code
             else -> 193
         }
     }
