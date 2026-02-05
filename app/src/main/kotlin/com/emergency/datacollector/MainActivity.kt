@@ -53,6 +53,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStartExperiment: Button
     private lateinit var btnStopExperiment: Button
     private lateinit var btnTestNormalCall: Button
+    private lateinit var btnUpdateMccMnc: Button
+    private lateinit var txtFileSize: TextView
 
 
     // Configuration
@@ -106,6 +108,16 @@ class MainActivity : AppCompatActivity() {
     private var perfettoTmpTracePath: String? = null
 
     private val perfettoTraceDir = "/data/misc/perfetto-traces"
+
+    private var tcpdumpPid: Int? = null
+
+    private fun runSuRoot(cmd: String): Pair<Int, String> {
+        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        val code = p.waitFor()
+        return code to (out + err)
+    }
 
     private fun runSuShell(cmd: String): Pair<Int, String> {
         // Run command as "shell" via su to match what worked in your manual test.
@@ -317,16 +329,17 @@ class MainActivity : AppCompatActivity() {
         btnStartExperiment = findViewById(R.id.btnStartExperiment)
         btnStopExperiment = findViewById(R.id.btnStopExperiment)
         btnTestNormalCall = findViewById(R.id.btnTestNormalCall)
+        btnUpdateMccMnc = findViewById(R.id.btnUpdateMccMnc)
+        txtFileSize = findViewById(R.id.txtFileSize)
 
 
-
-        // Setup experiments spinner (1-10)
         val experimentOptions = (1..10).toList()
-        val spinnerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, experimentOptions)
-        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val spinnerAdapter = ArrayAdapter(this, R.layout.spinner_item, experimentOptions)
+        spinnerAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item)
         spinnerExperimentsCount.adapter = spinnerAdapter
-        spinnerExperimentsCount.setSelection(9)  // Default to 10 (index 9)
-        
+        spinnerExperimentsCount.setSelection(9)
+
+
         // Load MCC-MNC database for operator lookup
         MccMncLookup.load(this)
         
@@ -347,13 +360,37 @@ class MainActivity : AppCompatActivity() {
         initEndCallButtonCoordinates()
         
         updateMccMnc()
+        updateFileSize()
+
+        // tcpdump binary
+        val allAbis = Build.SUPPORTED_ABIS.joinToString(", ")
+        appendLog("Supported ABIs: $allAbis")
+        appendLog("Primary ABI: ${Build.SUPPORTED_ABIS[0]}")
+
+        thread {
+            val result = ensureTcpdumpBinary()
+            handler.post {
+                if (result) {
+                    appendLog("✅ tcpdump binary test: SUCCESS")
+                } else {
+                    appendLog("❌ tcpdump binary test: FAILED")
+                }
+            }
+        }
         
         // GPS refresh button
         btnRefreshGps.setOnClickListener {
             refreshGpsLocation()
+            updateFileSize()
+        }
+
+        btnUpdateMccMnc.setOnClickListener {
+            updateMccMnc()
+            updateFileSize()
         }
         
         btnStartExperiment.setOnClickListener {
+            updateFileSize()
             if (checkPermissions()) {
                 // Update config from UI
                 experimentsPerScenario = spinnerExperimentsCount.selectedItem as Int
@@ -370,7 +407,7 @@ class MainActivity : AppCompatActivity() {
                     return@setOnClickListener
                 }
 
-
+                setInputsEnabled(false)
                 startFullCollection()
             } else {
                 requestPermissions()
@@ -378,6 +415,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnTestNormalCall.setOnClickListener {
+            updateFileSize()
             if (checkPermissions()) {
                 // Update config from UI
                 experimentsPerScenario = spinnerExperimentsCount.selectedItem as Int
@@ -400,8 +438,7 @@ class MainActivity : AppCompatActivity() {
                     appendLog("Test blocked: WiFi Calling number is emergency-like: '${normalizeDialNumber(wifiCallingNumber)}'")
                     return@setOnClickListener
                 }
-
-
+                setInputsEnabled(false)
                 isTestNormalCallMode = true
                 startFullCollection()
             } else {
@@ -412,6 +449,7 @@ class MainActivity : AppCompatActivity() {
 
         btnStopExperiment.setOnClickListener {
             stopCollection()
+            updateFileSize()
         }
 
         if (!checkPermissions()) {
@@ -986,6 +1024,7 @@ class MainActivity : AppCompatActivity() {
                             }
 
                             // Stop SCAT first, then capture logcat, then kill phone
+                            stopTcpdump(baseFileName)
                             if (enableScat) {
                                 appendLog("Stopping SCAT recording...")
                                 sendScatCommand("/stop-scat", null) { scatStopSuccess ->
@@ -1154,6 +1193,7 @@ class MainActivity : AppCompatActivity() {
                                             }, 1000)
                                         }
 
+                                        stopTcpdump(baseFileName)
                                         // Stop SCAT only if we actually started it
                                         if (enableScat && scatStarted.get()) {
                                             appendLog("Stopping SCAT recording...")
@@ -1189,7 +1229,11 @@ class MainActivity : AppCompatActivity() {
             if (shouldStop) { finishCollection("Stopped by user"); return }
 
             if (!enableScat) {
-                if (currentPhase == 4) proceedToSatellite() else proceedToMakeCall()
+                // ✅ Start tcpdump even if SCAT is disabled
+                startTcpdumpUntilOk(baseFileName, 1000L) { tcpdumpOk ->
+                    if (!tcpdumpOk) { finishCollection("Stopped"); return@startTcpdumpUntilOk }
+                    if (currentPhase == 4) proceedToSatellite() else proceedToMakeCall()
+                }
                 return
             }
 
@@ -1197,9 +1241,15 @@ class MainActivity : AppCompatActivity() {
             sendScatCommand("/start-scat", scatBody) { scatOk ->
                 if (scatOk) {
                     appendLog("SCAT started successfully: $pcapFileName")
-                    startPerfettoTraceUntilOk(baseFileName, 1000L) { ok ->
-                        if (!ok) { finishCollection("Stopped"); return@startPerfettoTraceUntilOk }
-                        if (currentPhase == 4) proceedToSatellite() else proceedToMakeCall()
+
+                    // ✅ Start tcpdump after SCAT
+                    startTcpdumpUntilOk(baseFileName, 1000L) { tcpdumpOk ->
+                        if (!tcpdumpOk) { finishCollection("Stopped"); return@startTcpdumpUntilOk }
+
+                        startPerfettoTraceUntilOk(baseFileName, 1000L) { ok ->
+                            if (!ok) { finishCollection("Stopped"); return@startPerfettoTraceUntilOk }
+                            if (currentPhase == 4) proceedToSatellite() else proceedToMakeCall()
+                        }
                     }
                 } else {
                     appendLog("SCAT start not ready (no HTTP 200). Retrying in ${retryDelayMs}ms...")
@@ -1317,6 +1367,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setInputsEnabled(enabled: Boolean) {
         btnRefreshGps.isEnabled = enabled
+        btnUpdateMccMnc.isEnabled = enabled
         editWifiCallingNumber.isEnabled = enabled
         spinnerExperimentsCount.isEnabled = enabled
         checkScenario1.isEnabled = enabled
@@ -1850,5 +1901,295 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { }
         
         return ""
+    }
+    // ===== File Size Calculation =====
+
+    /**
+     * Calculate total size of files in /sdcard/Android/data/com.emergency.datacollector/files
+     * and update txtFileSize TextView
+     */
+    private fun updateFileSize() {
+        thread {
+            try {
+                val dir = getExternalFilesDir(null)
+                if (dir == null || !dir.exists()) {
+                    handler.post { txtFileSize.text = "Total log size: 0.00 MB" }
+                    return@thread
+                }
+
+                val totalBytes = dir.walkTopDown()
+                    .filter { it.isFile }
+                    .sumOf { it.length() }
+
+                val gb = totalBytes / (1024.0 * 1024.0 * 1024.0)
+                val display = if (gb >= 1.0) {
+                    String.format("%.2f GB", gb)
+                } else {
+                    val mb = totalBytes / (1024.0 * 1024.0)
+                    String.format("%.2f MB", mb)
+                }
+
+                handler.post {
+                    txtFileSize.text = "Total log size: $display"
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    txtFileSize.text = "Total log size: Error"
+                    appendLog("File size calculation error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    // ===== tcpdump Control =====
+
+    /**
+     * Ensure tcpdump binary exists in /data/local/tmp
+     * Copy from assets (tcpdump_64 or tcpdump_32) based on CPU architecture
+     * Uses the same method as Perfetto config
+     */
+    private fun ensureTcpdumpBinary(): Boolean {
+        val target = "/data/local/tmp/tcpdump"
+
+        return try {
+            // 1) If tcpdump already exists and is executable (check as root)
+            val (_, outCheck) = runSuRoot("sh -c 'test -x \"$target\"; echo \$?'")
+            if (outCheck.trim().endsWith("0")) {
+                appendLog("tcpdump binary already exists: $target")
+                return true
+            }
+
+            // 2) Pick asset by ABI
+            val cpuAbi = Build.SUPPORTED_ABIS[0]
+            appendLog("Device CPU ABI: $cpuAbi")
+
+            val assetFileName = when {
+                cpuAbi.contains("arm64", ignoreCase = true) || cpuAbi.contains("v8a", ignoreCase = true) -> {
+                    appendLog("Using 64-bit tcpdump binary")
+                    "tcpdump_64"
+                }
+                cpuAbi.contains("armeabi", ignoreCase = true) || cpuAbi.contains("v7a", ignoreCase = true) -> {
+                    appendLog("Using 32-bit tcpdump binary")
+                    "tcpdump_32"
+                }
+                cpuAbi.contains("x86_64", ignoreCase = true) -> {
+                    appendLog("x86_64 detected, using 64-bit binary")
+                    "tcpdump_64"
+                }
+                cpuAbi.contains("x86", ignoreCase = true) -> {
+                    appendLog("x86 detected, using 32-bit binary")
+                    "tcpdump_32"
+                }
+                else -> {
+                    appendLog("tcpdump error: Unsupported CPU architecture: $cpuAbi")
+                    return false
+                }
+            }
+
+            // 3) Copy assets -> internal temp file
+            val localFile = File(filesDir, "tcpdump_temp")
+            try {
+                assets.open(assetFileName).use { input ->
+                    localFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                appendLog("tcpdump error: Failed to copy asset '$assetFileName': ${e.message}")
+                return false
+            }
+
+            if (!localFile.exists() || localFile.length() <= 0L) {
+                appendLog("tcpdump error: Failed to copy from assets (empty temp file)")
+                return false
+            }
+            appendLog("tcpdump copied to internal storage (${localFile.length()} bytes)")
+
+            // 4) Copy internal -> /data/local/tmp/tcpdump as root + chmod
+            val cmd = "cp \"${localFile.absolutePath}\" \"$target\" && chmod 755 \"$target\""
+            val cpExit = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
+            if (cpExit != 0) {
+                appendLog("tcpdump error: Failed to copy to $target (exit: $cpExit)")
+                return false
+            }
+
+            // 5) Verify executable as root
+            val (_, outVerify) = runSuRoot("sh -c 'test -x \"$target\"; echo \$?'")
+            if (!outVerify.trim().endsWith("0")) {
+                appendLog("tcpdump error: Binary not executable after setup")
+                val (_, outLs) = runSuRoot("ls -l \"$target\" 2>&1")
+                appendLog("Debug ls: ${outLs.take(200)}")
+                return false
+            }
+
+            appendLog("tcpdump binary ready: $target")
+
+            // 6) Optional: version check as root
+            val (exitTest, outTest) = runSuRoot("sh -c '$target --version 2>&1 | head -1'")
+            if (exitTest == 0 && outTest.isNotBlank()) {
+                appendLog("tcpdump version: ${outTest.trim().take(80)}")
+            } else {
+                appendLog("tcpdump version check: exit=$exitTest")
+            }
+
+            // 7) Cleanup temp
+            try {
+                localFile.delete()
+            } catch (_: Exception) {
+            }
+
+            true
+        } catch (e: Exception) {
+            appendLog("tcpdump setup error: ${e.message}")
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * Start tcpdump to capture all interfaces
+     * Filename: {baseFileName}_tcpdump.pcap
+     */
+    private fun startTcpdumpUntilOk(
+        baseFileName: String,
+        retryDelayMs: Long = 1000L,
+        onStarted: (Boolean) -> Unit
+    ) {
+        val pcapPath = "/sdcard/${baseFileName}_tcpdump.pcap"
+        val tcpdumpBin = "/data/local/tmp/tcpdump"
+
+        fun attempt() {
+            if (shouldStop || !isCollectionRunning) {
+                handler.post { onStarted(false) }
+                return
+            }
+
+            thread {
+                try {
+                    if (!ensureTcpdumpBinary()) {
+                        handler.post {
+                            appendLog("tcpdump not ready. Retry in ${retryDelayMs}ms")
+                            handler.postDelayed({ attempt() }, retryDelayMs)
+                        }
+                        return@thread
+                    }
+
+                    // Delete old file (root)
+                    runSuRoot("rm -f \"$pcapPath\"")
+
+                    // Start tcpdump as ROOT (important)
+                    // Use sh -c so "&" and "$!" are handled reliably.
+                    val cmd = "sh -c '$tcpdumpBin -i any -w \"$pcapPath\" >/dev/null 2>&1 & echo \$!'"
+                    val (exit, output) = runSuRoot(cmd)
+
+                    val pid = output.trim().lines().lastOrNull()?.trim()?.toIntOrNull()
+                    if (exit != 0 || pid == null || pid <= 0) {
+                        handler.post {
+                            appendLog("tcpdump start failed (exit=$exit): ${output.trim().take(200)}")
+                            handler.postDelayed({ attempt() }, retryDelayMs)
+                        }
+                        return@thread
+                    }
+
+                    // Wait 1s then confirm it's still alive
+                    Thread.sleep(1000)
+
+                    val (_, outPs) = runSuRoot("sh -c 'ps -A 2>/dev/null | grep \" $pid \" | grep tcpdump | grep -v grep'")
+                    if (outPs.isBlank()) {
+                        handler.post {
+                            appendLog("tcpdump died immediately (pid=$pid). Retry in ${retryDelayMs}ms")
+                            handler.postDelayed({ attempt() }, retryDelayMs)
+                        }
+                        return@thread
+                    }
+
+                    handler.post {
+                        tcpdumpPid = pid
+                        appendLog("tcpdump started (pid=$pid): ${baseFileName}_tcpdump.pcap")
+                        onStarted(true)
+                    }
+                } catch (e: Exception) {
+                    handler.post {
+                        appendLog("tcpdump start error: ${e.message}. Retry in ${retryDelayMs}ms")
+                        handler.postDelayed({ attempt() }, retryDelayMs)
+                    }
+                }
+            }
+        }
+
+        attempt()
+    }
+
+
+    private fun stopTcpdump(baseFileName: String) {
+        val pid = tcpdumpPid
+        tcpdumpPid = null
+
+        val pcapPath = "/sdcard/${baseFileName}_tcpdump.pcap"
+        val outDir = getExternalFilesDir(null)
+        if (outDir == null) {
+            appendLog("tcpdump stop error: external files dir is null")
+            return
+        }
+        val finalPath = "${outDir.absolutePath}/${baseFileName}_tcpdump.pcap"
+
+        thread {
+            try {
+                if (pid != null) {
+                    handler.post { appendLog("Stopping tcpdump (pid=$pid)...") }
+
+                    // TERM first (root)
+                    runSuRoot("kill -TERM $pid 2>/dev/null")
+
+                    // Wait up to 5s for exit
+                    var waited = 0
+                    while (waited < 50) {
+                        val (_, psOut) = runSuRoot("sh -c 'ps -A 2>/dev/null | grep \" $pid \" | grep tcpdump | grep -v grep'")
+                        if (psOut.isBlank()) break
+                        Thread.sleep(100)
+                        waited++
+                    }
+
+                    // Hard kill if still alive
+                    if (waited >= 50) {
+                        runSuRoot("kill -9 $pid 2>/dev/null")
+                    }
+
+                    // Give filesystem a moment to flush
+                    Thread.sleep(800)
+                }
+
+                // Check /sdcard file exists and non-empty (root)
+                val (_, outCheck) = runSuRoot("sh -c 'test -s \"$pcapPath\"; echo \$?'")
+                if (!outCheck.trim().endsWith("0")) {
+                    handler.post { appendLog("tcpdump warning: pcap file missing or empty: $pcapPath") }
+                    return@thread
+                }
+
+                // Copy to app external dir + chmod for adb pull
+                val cpExit = Runtime.getRuntime().exec(
+                    arrayOf("su", "-c", "cp \"$pcapPath\" \"$finalPath\" && chmod 644 \"$finalPath\"")
+                ).waitFor()
+
+                if (cpExit != 0) {
+                    handler.post { appendLog("tcpdump copy failed (exit=$cpExit)") }
+                    return@thread
+                }
+
+                // Remove temp file
+                runSuRoot("rm -f \"$pcapPath\"")
+
+                // Get size (root)
+                val (_, outSize) = runSuRoot("sh -c 'stat -c %s \"$finalPath\" 2>/dev/null || wc -c < \"$finalPath\"'")
+                val fileSize = outSize.trim().toLongOrNull() ?: 0L
+                val fileSizeKB = fileSize / 1024.0
+
+                handler.post {
+                    appendLog("tcpdump stopped: ${baseFileName}_tcpdump.pcap (%.2f KB)".format(fileSizeKB))
+                }
+            } catch (e: Exception) {
+                handler.post { appendLog("tcpdump stop error: ${e.message}") }
+            }
+        }
     }
 }
