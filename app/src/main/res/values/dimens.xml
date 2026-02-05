@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Screen -->
+    <dimen name="screen_padding">16dp</dimen>
+
+    <!-- Spacing -->
+    <dimen name="section_gap">8dp</dimen>          <!-- 大區塊間距（例如 Configuration -> rows、rows -> Scenarios、Buttons -> Logs） -->
+    <dimen name="row_spacing">3dp</dimen>           <!-- Configuration 下面每一列之間（更緊） -->
+    <dimen name="checkbox_row_spacing">-10dp</dimen>  <!-- Scenarios 兩排 checkbox 之間（更緊） -->
+    <dimen name="button_spacing">2dp</dimen>        <!-- Buttons 彼此之間（更緊） -->
+
+    <!-- Label/value -->
+    <dimen name="label_end">8dp</dimen>
+    <dimen name="value_pad_v">4dp</dimen>
+    <dimen name="value_pad_h">6dp</dimen>
+
+    <!-- Buttons -->
+    <dimen name="btn_h_small">40dp</dimen>
+    <dimen name="btn_h_medium">48dp</dimen>
+    <dimen name="btn_h_large">60dp</dimen>
+</resources>
