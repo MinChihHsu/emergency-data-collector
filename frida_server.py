@@ -133,6 +133,116 @@ def kill_frida_processes():
     subprocess.run(['killall', 'frida'], capture_output=True)
 
 
+def ensure_process_running(process_name, max_retries=3, wait_between=2.0):
+    """
+    Ensure a process is running before Frida attach.
+    If not running, try to start it and wait for it to be ready.
+    Returns True if process is confirmed running, False otherwise.
+    
+    Supported processes:
+    - com.android.phone
+    - com.sec.imsservice (Samsung)
+    - com.shannon.imsservice (Pixel)
+    """
+    for attempt in range(max_retries):
+        # Check if process is running
+        result = subprocess.run(
+            ['adb', 'shell', 'pidof', process_name],
+            capture_output=True,
+            text=True
+        )
+        
+        pid = result.stdout.strip()
+        if pid:
+            print(f"{process_name} is running (PID: {pid})")
+            return True
+        
+        print(f"{process_name} not running (attempt {attempt + 1}/{max_retries})")
+        
+        if attempt < max_retries - 1:
+            # Try to start the process based on type
+            print(f"Attempting to start {process_name}...")
+            
+            if process_name == "com.android.phone":
+                # Method 1: Start TelephonyDebugService
+                subprocess.run(
+                    ['adb', 'shell', 'am', 'startservice', 
+                     '-n', 'com.android.phone/.TelephonyDebugService'],
+                    capture_output=True
+                )
+                # Method 2: Trigger dialer activity briefly (fallback)
+                subprocess.run(
+                    ['adb', 'shell', 'am', 'start', '-a', 'android.intent.action.DIAL'],
+                    capture_output=True
+                )
+                time.sleep(1.0)
+                subprocess.run(
+                    ['adb', 'shell', 'input', 'keyevent', 'KEYCODE_BACK'],
+                    capture_output=True
+                )
+                
+            elif process_name == "com.sec.imsservice":
+                # Samsung IMS service - start via am
+                subprocess.run(
+                    ['adb', 'shell', 'am', 'startservice',
+                     '-n', 'com.sec.imsservice/.ImsService'],
+                    capture_output=True
+                )
+                
+            elif process_name == "com.shannon.imsservice":
+                # Pixel IMS service - start via am
+                subprocess.run(
+                    ['adb', 'shell', 'am', 'startservice',
+                     '-n', 'com.shannon.imsservice/.ImsService'],
+                    capture_output=True
+                )
+            
+            print(f"Waiting {wait_between}s for {process_name} to start...")
+            time.sleep(wait_between)
+    
+    print(f"ERROR: Failed to ensure {process_name} is running!")
+    return False
+
+
+def restart_stuck_process(process_name, wait_after=3.0):
+    """
+    Force restart a process that might be stuck (e.g., Attaching...).
+    Kills the process and waits for Android to restart it.
+    """
+    print(f"Force restarting {process_name}...")
+    
+    # Kill the process
+    subprocess.run(
+        ['adb', 'shell', 'su', '-c', f'pkill -f {process_name}'],
+        capture_output=True
+    )
+    
+    print(f"Waiting {wait_after}s for {process_name} to restart...")
+    time.sleep(wait_after)
+    
+    # Ensure it's running again
+    return ensure_process_running(process_name)
+
+
+def ensure_all_processes_for_device(device_type):
+    """
+    Ensure all required processes are running for the given device type.
+    Returns True if all processes are ready, False otherwise.
+    """
+    if device_type == "pixel":
+        processes = ["com.android.phone", "com.shannon.imsservice"]
+    else:  # samsung
+        processes = ["com.android.phone", "com.sec.imsservice"]
+    
+    for proc in processes:
+        if not ensure_process_running(proc):
+            print(f"Failed to ensure {proc} is running, trying restart...")
+            if not restart_stuck_process(proc):
+                return False
+    
+    return True
+
+
 def start_frida_scripts(device_type="samsung"):
     """
     Start Frida scripts based on device type.
@@ -147,6 +257,11 @@ def start_frida_scripts(device_type="samsung"):
 
     kill_frida_processes()
     time.sleep(0.5)
+
+    # Ensure all required processes are running before attempting to attach
+    if not ensure_all_processes_for_device(device_type):
+        print("Cannot start Frida: required processes not available")
+        return False
 
     if device_type == "pixel":
         print(f"Starting Frida for Pixel device...")
@@ -255,6 +370,11 @@ def start_frida_satellite():
 
     kill_frida_processes()
     time.sleep(0.5)
+
+    # Ensure com.android.phone is running before attempting to attach
+    if not ensure_process_running("com.android.phone"):
+        print("Cannot start Frida satellite: phone process not available")
+        return False
 
     print("Starting Frida satellite script...")
 
