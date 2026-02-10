@@ -13,6 +13,7 @@ import sys
 import re
 from collections import defaultdict
 from datetime import datetime
+import subprocess
 
 def parse_logcat_timestamp(line):
     """
@@ -100,7 +101,57 @@ def merge_logcat_files(txt_files, output_file):
     
     return len(all_lines)
 
-def find_timestamps_scenario_1_2(logcat_file, base_name, scenario):
+def trim_pcap_file(pcap_file, start_ts, end_ts):
+    """
+    Trim pcap file to only include packets between start_ts and end_ts.
+    Uses editcap (part of Wireshark/tshark) with frame.time (arrival time).
+    
+    Args:
+        pcap_file: Input pcap file path (e.g., "base_name_tcpdump.pcap")
+        start_ts: Start datetime object
+        end_ts: End datetime object
+    
+    Returns:
+        True if successful, False otherwise
+    
+    Output:
+        Creates a new file with "_trimmed.pcap" suffix (e.g., "base_name_tcpdump_trimmed.pcap")
+    """
+    try:
+        # Generate output filename: insert "_trimmed" before ".pcap"
+        if pcap_file.endswith('.pcap'):
+            output_file = pcap_file[:-5] + '_trimmed.pcap'
+        else:
+            output_file = pcap_file + '_trimmed.pcap'
+        
+        # Format timestamps for editcap: "YYYY-MM-DD HH:MM:SS.mmm"
+        # editcap uses frame.time (arrival time) by default
+        start_str = start_ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # Keep milliseconds
+        end_str = end_ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        # editcap command: editcap -A "start_time" -B "end_time" input.pcap output.pcap
+        # -A: Keep packets AFTER this time (inclusive)
+        # -B: Keep packets BEFORE this time (inclusive)
+        cmd = ['editcap', '-A', start_str, '-B', end_str, pcap_file, output_file]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print(f"  [✓] Trimmed PCAP: {os.path.basename(output_file)}")
+            return True
+        else:
+            print(f"  [✗] editcap failed for {os.path.basename(pcap_file)}: {result.stderr.strip()}")
+            return False
+    except FileNotFoundError:
+        print(f"  [✗] editcap not found. Please install Wireshark/tshark.")
+        print(f"      Ubuntu/Debian: sudo apt-get install wireshark-common")
+        print(f"      macOS: brew install wireshark")
+        return False
+    except Exception as e:
+        print(f"  [✗] Error trimming PCAP {os.path.basename(pcap_file)}: {e}")
+        return False
+
+def find_timestamps_scenario_1_2(logcat_file, base_name, scenario, folder_path):
     """
     Find relevant timestamps for Scenario 1 and 2:
     1. START_DIALING: "DataCollector: === START_DIALING: Dialed ==="
@@ -177,29 +228,121 @@ def find_timestamps_scenario_1_2(logcat_file, base_name, scenario):
         
         print(f"{'='*80}\n")
         
+        # ✅ Trim PCAP files if timestamps are available
+        if dialing_ts and call_blocked_ts:
+            print(f"Trimming PCAP files from {dialing_ts.strftime('%H:%M:%S.%f')[:-3]} to {call_blocked_ts.strftime('%H:%M:%S.%f')[:-3]}...")
+            # Find all PCAP files matching this base_name
+            pcap_found = False
+            for filename in os.listdir(folder_path):
+                if filename.startswith(base_name) and filename.endswith('.pcap') and not filename.endswith('_trimmed.pcap'):
+                    pcap_file = os.path.join(folder_path, filename)
+                    trim_pcap_file(pcap_file, dialing_ts, call_blocked_ts)
+                    pcap_found = True
+            
+            if not pcap_found:
+                print(f"  [!] No PCAP files found for {base_name}")
+        else:
+            print(f"[!] Cannot trim PCAP: missing dialing or call_blocked timestamp")
+        
     except Exception as e:
         print(f"Error processing {logcat_file}: {e}")
 
-def process_scenario_3(logcat_file, base_name, scenario):
+def process_scenario_3(logcat_file, base_name, scenario, folder_path):
     """
-    TODO: Process Scenario 3 (WiFi Calling)
+    Process Scenario 3 (WiFi Calling)
+    Find timestamps:
+    1. START_DIALING: "DataCollector: === START_DIALING*"
+    2. Receive SIP 180/183: "ImsPhoneCallTracker: [*] onCallProgressing"
+    3. Call Blocked: "DataCollector: === CALL_BLOCKED*"
     """
     print(f"\n{'='*80}")
     print(f"Processing Experiment: {base_name}")
     print(f"Scenario: #{scenario}")
     print(f"{'='*80}")
-    print("TODO: Not Implemented yet.")
-    print(f"{'='*80}\n")
+    
+    dialing_ts = None
+    sip_ringing_ts = None
+    call_blocked_ts = None
+    
+    try:
+        with open(logcat_file, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                timestamp = parse_logcat_timestamp(line)
+                if not timestamp:
+                    continue
+                
+                # Pattern 1: START_DIALING (any variant)
+                if 'DataCollector: === START_DIALING_NORMAL: Dialed ===' in line:
+                    dialing_ts = timestamp
+                    print(f"[✓] Found START_DIALING at: {timestamp.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
+                
+                # Pattern 2: SIP 180 Ringing / 183 Session Progress
+                if re.search(r'ImsPhoneCallTracker:\s*\[.*\]\s*onCallProgressing', line):
+                    sip_ringing_ts = timestamp
+                    print(f"[✓] Found receive SIP 180 Ringing/183 Session Progressing at: {timestamp.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
+                
+                # Pattern 3: Call Blocked
+                if re.search(r'DataCollector:\s*===\s*CALL_BLOCKED', line):
+                    call_blocked_ts = timestamp
+                    print(f"[✓] Found Call Blocked at: {timestamp.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
+        
+        # Print results
+        print(f"\n{'='*80}")
+        print(f"Timestamps for Experiment {base_name}:")
+        print(f"Scenario: #{scenario}")
+        
+        if dialing_ts:
+            print(f"Dialing: {dialing_ts.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
+        else:
+            print(f"Dialing: NOT FOUND")
+        
+        if sip_ringing_ts:
+            print(f"Receive SIP 180 Ringing/183 Session Progressing: {sip_ringing_ts.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
+        else:
+            print(f"Receive SIP 180 Ringing/183 Session Progressing: NOT FOUND")
+        
+        if call_blocked_ts:
+            print(f"Call Blocked: {call_blocked_ts.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
+        else:
+            print(f"Call Blocked: NOT FOUND")
+        
+        # Calculate time difference
+        if dialing_ts and sip_ringing_ts:
+            time_diff = (sip_ringing_ts - dialing_ts).total_seconds()
+            print(f"Time from dialed out to receive SIP 180/183: {time_diff:.3f} seconds")
+        else:
+            print(f"Time from dialed out to receive SIP 180/183: CANNOT CALCULATE (missing timestamps)")
+        
+        print(f"{'='*80}\n")
+        
+        # ✅ Trim PCAP files if timestamps are available
+        if dialing_ts and call_blocked_ts:
+            print(f"Trimming PCAP files from {dialing_ts.strftime('%H:%M:%S.%f')[:-3]} to {call_blocked_ts.strftime('%H:%M:%S.%f')[:-3]}...")
+            # Find all PCAP files matching this base_name
+            pcap_found = False
+            for filename in os.listdir(folder_path):
+                if filename.startswith(base_name) and filename.endswith('.pcap') and not filename.endswith('_trimmed.pcap'):
+                    pcap_file = os.path.join(folder_path, filename)
+                    trim_pcap_file(pcap_file, dialing_ts, call_blocked_ts)
+                    pcap_found = True
+            
+            if not pcap_found:
+                print(f"  [!] No PCAP files found for {base_name}")
+        else:
+            print(f"[!] Cannot trim PCAP: missing dialing or call_blocked timestamp")
+        
+    except Exception as e:
+        print(f"Error processing {logcat_file}: {e}")
 
-def process_scenario_4(logcat_file, base_name, scenario):
+def process_scenario_4(logcat_file, base_name, scenario, folder_path):
     """
-    TODO: Process Scenario 4 (Satellite)
+    Process Scenario 4 (Satellite) - No PCAP trimming for now
     """
     print(f"\n{'='*80}")
     print(f"Processing Experiment: {base_name}")
     print(f"Scenario: #{scenario}")
     print(f"{'='*80}")
-    print("TODO: Not Implemented yet.")
+    print("Scenario #4: PCAP files left untrimmed (as requested).")
     print(f"{'='*80}\n")
 
 def main():
@@ -250,11 +393,11 @@ def main():
         
         # Step 3: Process based on scenario
         if scenario in [1, 2]:
-            find_timestamps_scenario_1_2(output_file, base_name, scenario)
+            find_timestamps_scenario_1_2(output_file, base_name, scenario, folder_path)
         elif scenario == 3:
-            process_scenario_3(output_file, base_name, scenario)
+            process_scenario_3(output_file, base_name, scenario, folder_path)
         elif scenario == 4:
-            process_scenario_4(output_file, base_name, scenario)
+            process_scenario_4(output_file, base_name, scenario, folder_path)
         else:
             print(f"  Warning: Unknown scenario number: {scenario}")
     
@@ -264,4 +407,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
