@@ -111,6 +111,39 @@ class MainActivity : AppCompatActivity() {
 
     private var tcpdumpPid: Int? = null
 
+    // ===== Network Info Monitoring =====
+    private lateinit var wifiManager: android.net.wifi.WifiManager
+    private var isMonitoringNetwork = false
+    private val networkMonitorHandler = Handler(Looper.getMainLooper())
+
+    private val ratMonitorRunnable = object : Runnable {
+        override fun run() {
+            if (isMonitoringNetwork) {
+                logRATType()
+                networkMonitorHandler.postDelayed(this, 1000)
+            }
+        }
+    }
+
+    private val cellInfoMonitorRunnable = object : Runnable {
+        override fun run() {
+            if (isMonitoringNetwork) {
+                logCellInfo()
+                networkMonitorHandler.postDelayed(this, 1000)
+            }
+        }
+    }
+
+    private val wifiInfoMonitorRunnable = object : Runnable {
+        override fun run() {
+            if (isMonitoringNetwork) {
+                logWiFiInfo()
+                networkMonitorHandler.postDelayed(this, 5000)
+            }
+        }
+    }
+
+
     private fun runSuRoot(cmd: String): Pair<Int, String> {
         val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
         val out = p.inputStream.bufferedReader().readText()
@@ -366,6 +399,8 @@ class MainActivity : AppCompatActivity() {
         val allAbis = Build.SUPPORTED_ABIS.joinToString(", ")
         appendLog("Supported ABIs: $allAbis")
         appendLog("Primary ABI: ${Build.SUPPORTED_ABIS[0]}")
+        // Initialize WiFi Manager
+        wifiManager = getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
 
         thread {
             val result = ensureTcpdumpBinary()
@@ -941,6 +976,8 @@ class MainActivity : AppCompatActivity() {
         val proceedToMakeCall: () -> Unit = {
             handler.postDelayed({
                 if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+                // ✅ 在撥號前啟動網絡監控
+                startNetworkMonitoring()
 
                 // Make the call
                 appendLog("Dialing...")
@@ -956,36 +993,45 @@ class MainActivity : AppCompatActivity() {
 
                 // TODO: Timeout should be 5 minutes. Change when the app is ready.
                 waitForBlockMinWindow(timeoutSec = waitForBlockTimeoutSec) { blocked ->
-                if (blocked) {
+                    // ✅ 停止網絡監控
+                    stopNetworkMonitoring()
+
+                    if (blocked) {
                         appendLog("Call blocked! Waiting 2s for UI...")
                         Log.d("DataCollector", "=== CALL_BLOCKED: Waiting 2s before hangup ===" )
                     } else {
                         appendLog("Block timeout, hanging up anyway...")
                         Log.d("DataCollector", "=== BLOCK_TIMEOUT: Hanging up anyway ===")
                     }
-                    
+
                     // Wait 2 seconds for UI to react, then hang up via tap
                     handler.postDelayed({
                         appendLog("Ending call via tap...")
                         tapScreen(endCallButtonX, endCallButtonY)
-                        
-                        // Immediately kill phone app to prevent auto-redial
-                        handler.postDelayed({
-                            sendFridaCommand("/pkill-phone") { _ ->
-                                appendLog("Quick pkill sent to prevent redial")
 
+                        // ✅ Scenario #3 特殊處理：只有在 blocked 失敗時才 pkill
+                        val shouldPkill = !(currentPhase == 3 && blocked)
+
+                        handler.postDelayed({
+                            if (shouldPkill) {
+                                sendFridaCommand("/pkill-phone") { _ ->
+                                    appendLog("Quick pkill sent to prevent redial")
+                                    stopPerfettoTraceAndSave(baseFileName)
+                                }
+                            } else {
+                                appendLog("Scenario #3: Call blocked successfully, skipping pkill")
                                 stopPerfettoTraceAndSave(baseFileName)
                             }
                         }, 500)  // 500ms after tap
 
-                        // Wait after hangup, then stop SCAT and capture logcat BEFORE killing phone
+                        // Wait after hangup, then stop SCAT and capture logcat
                         handler.postDelayed({
                             if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
 
                             // Function to proceed after capturing logs
                             val proceedToNext: () -> Unit = {
                                 appendLog("Proceeding to next measurement...")
-                                
+
                                 // Next measurement or next scenario
                                 handler.postDelayed({
                                     if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
@@ -1017,7 +1063,7 @@ class MainActivity : AppCompatActivity() {
                                 proceedToNext()
                             }
 
-                            // Stop SCAT first, then capture logcat, then kill phone
+                            // Stop SCAT first, then capture logcat
                             stopTcpdump(baseFileName)
                             if (enableScat) {
                                 appendLog("Stopping SCAT recording...")
@@ -1043,7 +1089,8 @@ class MainActivity : AppCompatActivity() {
         val proceedToSatellite: () -> Unit = {
             handler.postDelayed({
                 if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
-
+                // ✅ 在啟動 Satellite 前啟動網絡監控
+                startNetworkMonitoring()
                 appendLog("Launching Satellite SOS questionnaire...")
 
                 try {
@@ -1106,6 +1153,10 @@ class MainActivity : AppCompatActivity() {
 
                                 appendLog("Monitoring satellite connection...")
                                 monitorSatelliteConnected { connected ->
+                                    // ✅ 停止網絡監控
+                                    stopNetworkMonitoring()
+
+
                                     stopPerfettoTraceAndSave(baseFileName)
 
                                     if (!connected) {
@@ -1211,6 +1262,7 @@ class MainActivity : AppCompatActivity() {
                     }, 2000)  // Wait 2 seconds for app to open
 
                 } catch (e: Exception) {
+                    stopNetworkMonitoring()
                     appendLog("Satellite launch error: ${e.message}")
                     finishCollection("Satellite launch failed")
                 }
@@ -1275,14 +1327,29 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        fun startFridaWifiCallingThenStartScat() {
+            if (shouldStop) { finishCollection("Stopped by user"); return }
+
+            appendLog("Starting Frida WiFi calling monitor...")
+            sendFridaCommand("/start-frida-wificalling", null) { fridaOk ->
+                if (fridaOk) {
+                    appendLog("Frida WiFi calling monitor started")
+                    startScatUntilOkThenProceed()
+                } else {
+                    appendLog("Frida WiFi calling start not ready. Retrying in ${retryDelayMs}ms...")
+                    handler.postDelayed({ startFridaWifiCallingThenStartScat() }, retryDelayMs)
+                }
+            }
+        }
+
 
 
         // Step 2: Start Frida blocker (must be before SCAT) - now enforced
         // Step 2: Start Frida blocker (must be before SCAT) - now enforced
         // ✅ Scenario 3: skip starting frida script (/start-frida)
         if (currentPhase == 3) {
-            appendLog("Scenario 3: skipping Frida (/start-frida)")
-            startScatUntilOkThenProceed()
+            appendLog("Scenario 3: starting WiFi calling monitor...")
+            startFridaWifiCallingThenStartScat()
         } else {
             startFridaUntilOkThenStartScat()
         }
@@ -1329,7 +1396,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun finishCollection(message: String) {
         isCollectionRunning = false
-
+        stopNetworkMonitoring()
         // ✅ 確保 service 被停止（雙重保險）
         SatelliteMonitorService.stop(this)
 
@@ -2186,4 +2253,141 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    // ===== Network Monitoring Functions =====
+
+    private fun startNetworkMonitoring() {
+        if (isMonitoringNetwork) return
+
+        isMonitoringNetwork = true
+        appendLog("📡 Starting network monitoring...")
+        Log.d("NetworkMonitor", "=== NETWORK_MONITORING_STARTED ===")
+
+        networkMonitorHandler.post(ratMonitorRunnable)
+        networkMonitorHandler.post(cellInfoMonitorRunnable)
+        networkMonitorHandler.post(wifiInfoMonitorRunnable)
+    }
+
+    private fun stopNetworkMonitoring() {
+        if (!isMonitoringNetwork) return
+
+        isMonitoringNetwork = false
+        appendLog("📡 Stopping network monitoring...")
+        Log.d("NetworkMonitor", "=== NETWORK_MONITORING_STOPPED ===")
+
+        networkMonitorHandler.removeCallbacks(ratMonitorRunnable)
+        networkMonitorHandler.removeCallbacks(cellInfoMonitorRunnable)
+        networkMonitorHandler.removeCallbacks(wifiInfoMonitorRunnable)
+    }
+
+    private fun logRATType() {
+        try {
+            val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+
+            val voiceNetworkType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                getNetworkTypeString(telephonyManager.voiceNetworkType)
+            } else {
+                "N/A"
+            }
+
+            val dataNetworkType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                getNetworkTypeString(telephonyManager.dataNetworkType)
+            } else {
+                "N/A"
+            }
+
+            Log.d("NetworkMonitor", "Current RAT type: {VoiceNetwork: $voiceNetworkType, DataNetwork: $dataNetworkType}")
+        } catch (e: Exception) {
+            Log.e("NetworkMonitor", "RAT type error: ${e.message}")
+        }
+    }
+
+    private fun logCellInfo() {
+        try {
+            if (ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+
+            val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+
+            telephonyManager.requestCellInfoUpdate(
+                java.util.concurrent.Executor { runnable -> networkMonitorHandler.post(runnable) },
+                object : TelephonyManager.CellInfoCallback() {
+                    override fun onCellInfo(cellInfo: MutableList<CellInfo>) {
+                        val cellInfoStr = cellInfo.joinToString(", ") { cell ->
+                            "registered=${cell.isRegistered}, timestamp=${cell.timeStamp}, $cell"
+                        }
+                        Log.d("NetworkMonitor", "Cell Info for current subscription: [$cellInfoStr]")
+                    }
+
+                    override fun onError(errorCode: Int, detail: Throwable?) {
+                        Log.e("NetworkMonitor", "Cell info error: code=$errorCode, detail=${detail?.message}")
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            Log.e("NetworkMonitor", "Cell info error: ${e.message}")
+        }
+    }
+
+    private fun logWiFiInfo() {
+        try {
+            if (ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+
+            val isWiFiEnabled = wifiManager.isWifiEnabled
+            val results = wifiManager.scanResults
+
+            if (results == null || results.isEmpty()) {
+                Log.d("NetworkMonitor", "Nearby WiFi Info: [WiFi Enabled: $isWiFiEnabled, No networks found]")
+            } else {
+                val wifiInfoStr = results.joinToString(", ") { scanResult ->
+                    "SSID=${scanResult.SSID}, BSSID=${scanResult.BSSID}, level=${scanResult.level}, freq=${scanResult.frequency}"
+                }
+                Log.d("NetworkMonitor", "Nearby WiFi Info: [$wifiInfoStr]")
+            }
+        } catch (e: Exception) {
+            Log.e("NetworkMonitor", "WiFi info error: ${e.message}")
+        }
+    }
+
+    private fun getNetworkTypeString(networkType: Int): String {
+        return when (networkType) {
+            TelephonyManager.NETWORK_TYPE_UNKNOWN -> "UNKNOWN"
+            TelephonyManager.NETWORK_TYPE_GPRS -> "GPRS"
+            TelephonyManager.NETWORK_TYPE_EDGE -> "EDGE"
+            TelephonyManager.NETWORK_TYPE_UMTS -> "UMTS"
+            TelephonyManager.NETWORK_TYPE_CDMA -> "CDMA"
+            TelephonyManager.NETWORK_TYPE_EVDO_0 -> "EVDO_0"
+            TelephonyManager.NETWORK_TYPE_EVDO_A -> "EVDO_A"
+            TelephonyManager.NETWORK_TYPE_1xRTT -> "1xRTT"
+            TelephonyManager.NETWORK_TYPE_HSDPA -> "HSDPA"
+            TelephonyManager.NETWORK_TYPE_HSUPA -> "HSUPA"
+            TelephonyManager.NETWORK_TYPE_HSPA -> "HSPA"
+            TelephonyManager.NETWORK_TYPE_IDEN -> "IDEN"
+            TelephonyManager.NETWORK_TYPE_EVDO_B -> "EVDO_B"
+            TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
+            TelephonyManager.NETWORK_TYPE_EHRPD -> "EHRPD"
+            TelephonyManager.NETWORK_TYPE_HSPAP -> "HSPAP"
+            TelephonyManager.NETWORK_TYPE_GSM -> "GSM"
+            TelephonyManager.NETWORK_TYPE_TD_SCDMA -> "TD_SCDMA"
+            TelephonyManager.NETWORK_TYPE_IWLAN -> "IWLAN"
+            else -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && networkType == TelephonyManager.NETWORK_TYPE_NR) {
+                    "NR"
+                } else {
+                    "UNKNOWN($networkType)"
+                }
+            }
+        }
+    }
+
 }
