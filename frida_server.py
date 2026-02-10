@@ -596,6 +596,48 @@ def start_frida_satellite_endpoint():
     else:
         return jsonify({"status": "error", "message": "Failed to start frida satellite script"}), 500
 
+@app.route('/start-frida-wificalling', methods=['POST'])
+def start_frida_wificalling():
+    """
+    Start Frida WiFi Calling monitor script for Scenario #3.
+    Hooks com.android.phone to detect ALERTING state and terminate call immediately.
+    """
+    print("\n=== Received: /start-frida-wificalling ===")
+
+    global frida_processes
+
+    kill_frida_processes()
+    time.sleep(0.5)
+
+    # Ensure com.android.phone is running before attempting to attach
+    if not ensure_process_running("com.android.phone"):
+        print("Cannot start Frida WiFi calling: phone process not available")
+        return jsonify({"status": "error", "message": "Phone process not available"}), 500
+
+    print("Starting Frida WiFi calling monitor script...")
+
+    try:
+        proc = subprocess.Popen(
+            ['frida', '-U', '-n', 'com.android.phone', '-l', os.path.join(SCRIPT_DIR, 'monitor_call_state.js')],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0
+        )
+        frida_processes.append(proc)
+        print(f"Started frida WiFi calling monitor for com.android.phone (PID: {proc.pid})")
+    except Exception as e:
+        print(f"Error starting WiFi calling frida script: {e}")
+        return jsonify({"status": "error", "message": f"Failed to start: {e}"}), 500
+
+    # Wait for FRIDA_READY marker
+    ok, out = wait_for_marker(proc, "FRIDA_READY:wifi_call_monitoring", timeout_s=2.0)
+    if not ok:
+        print("Frida ready timeout or failure (WiFi Calling).")
+        print("proc tail:\n", out)
+        return jsonify({"status": "error", "message": "Frida script not ready"}), 500
+
+    return jsonify({"status": "ok", "message": "Frida WiFi calling monitor started"}), 200
 
 
 @app.route('/wait-for-block', methods=['POST'])
