@@ -680,16 +680,18 @@ def wait_for_block():
                 
             if rlist:
                 try:
-                    # Use os.read() for non-blocking fd (readline() doesn't work well with non-blocking)
                     chunk = os.read(fd, 4096)
                     if not chunk:
                         continue
                     
-                    # Accumulate in buffer
                     proc_buffers[id(proc)] += chunk
-                    
-                    # Check if buffer contains BLOCKED marker
                     buf_str = proc_buffers[id(proc)].decode('utf-8', errors='replace')
+                    
+                    # ✅ Debug: 輸出最近收到的內容
+                    recent_lines = buf_str.split('\n')[-5:]  # Last 5 lines
+                    for line in recent_lines:
+                        if line.strip():
+                            print(f"[DEBUG] Frida output: {line.strip()}")
                     if "BLOCKED:" in buf_str:
                         # Extract the line containing BLOCKED:
                         for line in buf_str.split('\n'):

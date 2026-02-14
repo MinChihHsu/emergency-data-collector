@@ -189,6 +189,7 @@ def find_timestamps_scenario_1_2(logcat_file, base_name, scenario, folder_path):
                 # Pattern 3: SETUP_DATA_CALL (collect all before call blocked)
                 if re.search(r'RILJ\s*:\s*\[\d+\]<\s*SETUP_DATA_CALL\s+DataCallResponse:', line):
                     setup_data_call_candidates.append(timestamp)
+                    
         
         # Find the closest SETUP_DATA_CALL before call_blocked_ts
         if call_blocked_ts and setup_data_call_candidates:
@@ -282,7 +283,7 @@ def process_scenario_3(logcat_file, base_name, scenario, folder_path):
                     print(f"[✓] Found receive SIP 180 Ringing/183 Session Progressing at: {timestamp.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
                 
                 # Pattern 3: Call Blocked
-                if re.search(r'DataCollector:\s*===\s*CALL_BLOCKED', line):
+                if 'DataCollector: === CALL_BLOCKED' in line:
                     call_blocked_ts = timestamp
                     print(f"[✓] Found Call Blocked at: {timestamp.strftime('%m-%d %H:%M:%S.%f')[:-3]}")
         
