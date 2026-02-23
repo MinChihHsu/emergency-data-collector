@@ -259,6 +259,16 @@
             android:textColor="#FFFFFF"
             android:backgroundTint="#2196F3"
             android:enabled="false"
+            android:layout_marginBottom="@dimen/button_spacing" />
+
+        <Button
+            android:id="@+id/btnUploadLogs"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/btn_h_medium"
+            android:text="Upload Logs to Cloud"
+            android:textSize="14sp"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#FF9800"
             android:layout_marginBottom="@dimen/section_gap" />
 
         <!-- Hidden fields for compatibility -->
