@@ -2411,7 +2411,7 @@ class MainActivity : AppCompatActivity() {
     // ===== GCS Log Upload =====
 
     companion object {
-        // ⚠️ Change this to your GCS bucket name
+        // Change this to your GCS bucket name
         private const val GCS_BUCKET = "emergency-data-collector-logs"
         private const val GCS_SCOPE = "https://www.googleapis.com/auth/devstorage.read_write"
         private const val GCS_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -2598,7 +2598,7 @@ class MainActivity : AppCompatActivity() {
     private fun uploadAllLogs() {
         isUploading = true
         btnUploadLogs.isEnabled = false
-        btnUploadLogs.text = "⏳ Uploading..."
+        btnUploadLogs.text = "Uploading..."
         appendLog("=== Starting Cloud Upload ===")
 
         thread {
@@ -2609,7 +2609,7 @@ class MainActivity : AppCompatActivity() {
                     appendLog("❌ Upload error: log directory not found")
                     isUploading = false
                     btnUploadLogs.isEnabled = true
-                    btnUploadLogs.text = "📤 Upload Logs to Cloud"
+                    btnUploadLogs.text = "Upload Logs to Cloud"
                 }
                 return@thread
             }
@@ -2634,7 +2634,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "All files already uploaded!", Toast.LENGTH_SHORT).show()
                     isUploading = false
                     btnUploadLogs.isEnabled = true
-                    btnUploadLogs.text = "📤 Upload Logs to Cloud"
+                    btnUploadLogs.text = "Upload Logs to Cloud"
                 }
                 return@thread
             }
@@ -2650,7 +2650,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "Upload failed: auth error", Toast.LENGTH_LONG).show()
                     isUploading = false
                     btnUploadLogs.isEnabled = true
-                    btnUploadLogs.text = "📤 Upload Logs to Cloud"
+                    btnUploadLogs.text = "Upload Logs to Cloud"
                 }
                 return@thread
             }
@@ -2683,7 +2683,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, summary, Toast.LENGTH_LONG).show()
                 isUploading = false
                 btnUploadLogs.isEnabled = true
-                btnUploadLogs.text = "📤 Upload Logs to Cloud"
+                btnUploadLogs.text = "Upload Logs to Cloud"
                 updateFileSize()
             }
 
@@ -2695,7 +2695,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Upload crashed: ${t.javaClass.simpleName}", Toast.LENGTH_LONG).show()
                 isUploading = false
                 btnUploadLogs.isEnabled = true
-                btnUploadLogs.text = "📤 Upload Logs to Cloud"
+                btnUploadLogs.text = "Upload Logs to Cloud"
             }
         }
     }

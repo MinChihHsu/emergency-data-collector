@@ -98,8 +98,8 @@
 - Open and Run emergency-data-collector
   - Open the app, select the scenario you need, and how many experiments per scenario, then start log collection
 - Log Upload
-  - **TODO**
-    
+  - Get the GCS Service Account JSON file from developer
+  - Save the JSON file to `app/src/main/assets/gcs_service_account.json`
 
 ## Others
 ### output format reference
