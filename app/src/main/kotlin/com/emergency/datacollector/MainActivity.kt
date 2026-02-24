@@ -606,39 +606,48 @@ class MainActivity : AppCompatActivity() {
     // ===== MCC/MNC and Country Code =====
 
     private fun updateMccMnc() {
-        try {
-            val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-            
-            // MCC+MNC
-            val networkOperator = telephonyManager.networkOperator
-            if (networkOperator.isNotEmpty() && networkOperator.length >= 5) {
-                mccMnc = networkOperator
-            } else {
-                mccMnc = "000000"
-            }
-            txtMccMnc.text = mccMnc
-            
-            // operator name: first try CSV lookup, fallback to TelephonyManager
-            val csvBrand = MccMncLookup.getBrand(mccMnc)
-            val netOpName = telephonyManager.networkOperatorName
-            operatorName = csvBrand ?: (if (netOpName.isNotEmpty()) netOpName else "Unknown")
-            
-            // get country code (2-letter ISO)
-            val networkCountry = telephonyManager.networkCountryIso
-            if (networkCountry.isNotEmpty()) {
-                countryCode = networkCountry.uppercase()
-            } else {
-                countryCode = "--"
-            }
-            txtCountryCode.text = countryCode
-            
-        } catch (e: Exception) {
+    try {
+        val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+
+        // MCC+MNC: prefer SIM card value (updates immediately on SIM swap),
+        // fallback to network operator (may lag on Samsung Knox after SIM swap)
+        val simOp = telephonyManager.simOperator
+        val networkOperator = if (simOp.isNotEmpty()) simOp else telephonyManager.networkOperator
+        if (networkOperator.isNotEmpty() && networkOperator.length >= 5) {
+            mccMnc = networkOperator
+        } else {
             mccMnc = "000000"
-            countryCode = "--"
-            txtMccMnc.text = mccMnc
-            txtCountryCode.text = countryCode
         }
+        txtMccMnc.text = mccMnc
+
+        // operator name: CSV lookup → simOperatorName → networkOperatorName
+        val csvBrand = MccMncLookup.getBrand(mccMnc)
+        val simOpName = telephonyManager.simOperatorName
+        val netOpName = telephonyManager.networkOperatorName
+        operatorName = csvBrand ?: when {
+            simOpName.isNotEmpty() -> simOpName
+            netOpName.isNotEmpty() -> netOpName
+            else -> "Unknown"
+        }
+
+        // country code: prefer SIM country, fallback to network country
+        val simCountry = telephonyManager.simCountryIso
+        val networkCountry = telephonyManager.networkCountryIso
+        val country = if (simCountry.isNotEmpty()) simCountry else networkCountry
+        if (country.isNotEmpty()) {
+            countryCode = country.uppercase()
+        } else {
+            countryCode = "--"
+        }
+        txtCountryCode.text = countryCode
+
+    } catch (e: Exception) {
+        mccMnc = "000000"
+        countryCode = "--"
+        txtMccMnc.text = mccMnc
+        txtCountryCode.text = countryCode
     }
+}
     
     // ===== Main Collection Flow =====
     
@@ -2536,16 +2545,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
     val md5 = computeMd5Base64(file)
-        // Build folder name: {country}_{operator}_{model}_{date}  e.g. TW_TWM_SM-G9910_20260223
-        // Filename format: {country}_{operator}_{model}_{deviceId}_{date}_{scenario}_{exp}_{time}_{loc}.ext
+        // Folder = everything from filename start up to (and including) the date token
+        // e.g. TW_Chunghwa_Pixel_10_6770fca51d658278_20260223
         val parts = file.nameWithoutExtension.split("_")
-        val folderName = if (parts.size >= 5) {
-            // parts[0]=country, [1]=operator, [2]=model, [3]=deviceId, [4]=date
-            "${parts[0]}_${parts[1]}_${parts[2]}_${parts[4]}"
+        val dateIdx = parts.indexOfFirst { it.matches(Regex("^\\d{8}$")) }
+        val folderName = if (dateIdx > 0) {
+            parts.subList(0, dateIdx + 1).joinToString("_")
         } else {
-            // Fallback for files that don't follow naming convention (e.g. perfetto traces)
+            // Fallback: build from current device info
             val today = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
-            "${countryCode}_${operatorName.replace(" ", "")}_${modelName.replace(" ", "_")}_${today}"
+            "${countryCode}_${operatorName.replace(" ", "")}_${modelName.replace(" ", "_")}_${deviceId}_${today}"
         }
         val objectName = java.net.URLEncoder.encode("$folderName/${file.name}", "UTF-8")
         val uploadUrl = "https://storage.googleapis.com/upload/storage/v1/b/$GCS_BUCKET/o" +
