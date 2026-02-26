@@ -41,7 +41,7 @@ class SatelliteMonitorService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var startTime: Long = 0
     private val timeoutMillis = 5 * 60 * 1000L  // 5 minutes
-    private val checkIntervalMillis = 30_000L   // 30 seconds
+    private val checkIntervalMillis = 10_000L   // 10 seconds
     private var lastCheckTime = ""
 
     override fun onCreate() {
@@ -64,10 +64,10 @@ class SatelliteMonitorService : Service() {
         return START_STICKY
     }
 
+    // 在 SatelliteMonitorService.kt 中修改
     private fun checkLogcat() {
         if (!isRunning) return
 
-        // 檢查超時
         val elapsedTime = System.currentTimeMillis() - startTime
         if (elapsedTime >= timeoutMillis) {
             Log.d("SatelliteMonitor", "Timeout reached (5 minutes)")
@@ -77,30 +77,22 @@ class SatelliteMonitorService : Service() {
 
         Log.d("SatelliteMonitor", "Logcat poll... (elapsed: ${elapsedTime/1000}s)")
 
-        // 在 background thread 中執行 logcat 檢查
         thread {
             try {
-                val cmd = "logcat -T '$lastCheckTime' -d -e 'SATELLITE_MODEM_STATE_CONNECTED|Entering ConnectedState'"
-                val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+                // ✅ 使用 su 執行 logcat（以 root 身份讀取）
+                val cmd = "logcat -d -s SG-APK-Telephony:* SatelliteSessionController:* | grep SATELLITE_MODEM_STATE_CONNECTED"
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))  // ← 加上 su -c
                 val logcatOutput = process.inputStream.bufferedReader().readText()
-                process.waitFor()
+                val exitCode = process.waitFor()
 
-                Log.d("SatelliteMonitor", "Logcat poll done, len=${logcatOutput.length}")
+                Log.d("SatelliteMonitor", "Logcat poll done, len=${logcatOutput.length}, exitCode=$exitCode")
 
-                // 更新下次檢查的起始時間
-                lastCheckTime = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
-                    .format(Date(System.currentTimeMillis() - 500))
-
-                // 檢查是否找到關鍵字
-                if (logcatOutput.contains("SATELLITE_MODEM_STATE_CONNECTED") ||
-                    logcatOutput.contains("Entering ConnectedState")) {
-
-                    Log.d("SatelliteMonitor", "Satellite connection detected!")
+                if (logcatOutput.isNotEmpty() && logcatOutput.contains("SATELLITE_MODEM_STATE_CONNECTED")) {
+                    Log.d("SatelliteMonitor", "Satellite connection detected! Output: $logcatOutput")
                     stopMonitoring(true)
                     return@thread
                 }
 
-                // ✅ 關鍵修復：在主線程調度下一次檢查
                 handler.postDelayed({
                     if (isRunning) {
                         checkLogcat()
@@ -108,9 +100,8 @@ class SatelliteMonitorService : Service() {
                 }, checkIntervalMillis)
 
             } catch (e: Exception) {
-                Log.e("SatelliteMonitor", "Logcat check error: ${e.message}")
+                Log.e("SatelliteMonitor", "Logcat check error: ${e.message}", e)
 
-                // 即使出錯也繼續監控
                 handler.postDelayed({
                     if (isRunning) {
                         checkLogcat()
@@ -120,29 +111,70 @@ class SatelliteMonitorService : Service() {
         }
     }
 
+
+
     private fun stopMonitoring(foundKeyword: Boolean) {
         if (!isRunning) return
         isRunning = false
 
         Log.d("SatelliteMonitor", "Stopping monitoring, found=$foundKeyword")
 
-        // Force stop Stargate app
-        try {
-            val cmd = "am force-stop com.google.android.apps.stargate"
-            Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
-            Log.d("SatelliteMonitor", "Stargate app force-stopped")
-        } catch (e: Exception) {
-            Log.e("SatelliteMonitor", "Force-stop error: ${e.message}")
+        // ✅ NEW: If connected, perform graceful exit sequence
+        if (foundKeyword) {
+            thread {
+                try {
+                    Log.d("SatelliteMonitor", "Satellite connected! Starting graceful exit sequence...")
+
+                    // Step 1: Force stop messaging app
+                    Log.d("SatelliteMonitor", "Step 1: Stopping messaging app...")
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "am force-stop com.google.android.apps.messaging")).waitFor()
+                    Thread.sleep(1000)
+
+                    Log.d("SatelliteMonitor", "Step 1: Stopping scone app...")
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "am force-stop com.google.android.apps.scone")).waitFor()
+                    Thread.sleep(10000)
+
+                    // Step 2: Tap "End" button (top-right)
+                    Log.d("SatelliteMonitor", "Step 2: Tapping End button (905, 270)...")
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "input tap 905 270")).waitFor()
+                    Thread.sleep(1000)
+
+                    // Step 3: Tap "No, I don't need help" checkbox
+                    Log.d("SatelliteMonitor", "Step 3: Tapping 'No' checkbox (135, 1850)...")
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "input tap 135 1850")).waitFor()
+                    Thread.sleep(500)
+
+                    // Step 4: Tap "Send & End" button
+                    Log.d("SatelliteMonitor", "Step 4: Tapping Send & End button (865, 2200)...")
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "input tap 865 2200")).waitFor()
+                    Thread.sleep(1000)
+
+                    // Step 5: Force stop Stargate app
+                    Log.d("SatelliteMonitor", "Step 5: Force-stopping Stargate app...")
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "am force-stop com.google.android.apps.stargate")).waitFor()
+                    Log.d("SatelliteMonitor", "Graceful exit sequence completed")
+
+                } catch (e: Exception) {
+                    Log.e("SatelliteMonitor", "Graceful exit error: ${e.message}")
+                }
+            }
+        } else {
+            // ✅ Timeout case: just force-stop Stargate
+            try {
+                Log.d("SatelliteMonitor", "Timeout: Force-stopping Stargate app...")
+                val cmd = "am force-stop com.google.android.apps.stargate"
+                Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
+                Log.d("SatelliteMonitor", "Stargate app force-stopped")
+            } catch (e: Exception) {
+                Log.e("SatelliteMonitor", "Force-stop error: ${e.message}")
+            }
         }
 
-        // 等待1分鐘後回調
-        val waitMs = if (foundKeyword) 60000L else 0L
-        handler.postDelayed({
-            callback?.invoke(foundKeyword)
-            callback = null
-            stopSelf()
-        }, waitMs)
+        callback?.invoke(foundKeyword)
+        callback = null
+        stopSelf()
     }
+
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

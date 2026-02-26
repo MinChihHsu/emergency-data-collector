@@ -38,6 +38,11 @@ S21_USERAGENT_SCRIPT = os.path.join(SCRIPT_DIR, "s21_void_useragent.js")
 PIXEL_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_gsm_dial.js")
 PIXEL_CALLSESSION_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_callsessionadaptor.js")
 
+# Moto Frida scripts
+MOTO_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "moto_void_gsm_dial.js")
+MOTO_IMSSERVICE_SCRIPT = os.path.join(SCRIPT_DIR, "moto_void_imsserderrxr.js")
+
+
 # Pixel Satellite Frida script
 PIXEL_SATELLITE_BLOCK_DATAGRAM_SCRIPT = os.path.join(SCRIPT_DIR, "pixel_satellite_block_datagram.js")
 
@@ -143,6 +148,7 @@ def ensure_process_running(process_name, max_retries=3, wait_between=2.0):
     - com.android.phone
     - com.sec.imsservice (Samsung)
     - com.shannon.imsservice (Pixel)
+    - org.codeaurora.ims (Moto) 
     """
     for attempt in range(max_retries):
         # Check if process is running
@@ -197,11 +203,20 @@ def ensure_process_running(process_name, max_retries=3, wait_between=2.0):
                     capture_output=True
                 )
             
+            # Moto IMS service (修正 process name)
+            elif process_name == "org.codeaurora.ims":
+                subprocess.run(
+                    ['adb', 'shell', 'am', 'startservice',
+                     '-n', 'org.codeaurora.ims/.ImsService'],
+                    capture_output=True
+                )
+            
             print(f"Waiting {wait_between}s for {process_name} to start...")
             time.sleep(wait_between)
     
     print(f"ERROR: Failed to ensure {process_name} is running!")
     return False
+
 
 
 def restart_stuck_process(process_name, wait_after=3.0):
@@ -231,6 +246,8 @@ def ensure_all_processes_for_device(device_type):
     """
     if device_type == "pixel":
         processes = ["com.android.phone", "com.shannon.imsservice"]
+    elif device_type == "moto":
+        processes = ["com.android.phone", "org.codeaurora.ims"]
     else:  # samsung
         processes = ["com.android.phone", "com.sec.imsservice"]
     
@@ -241,6 +258,7 @@ def ensure_all_processes_for_device(device_type):
                 return False
     
     return True
+
 
 
 def start_frida_scripts(device_type="samsung"):
@@ -304,6 +322,52 @@ def start_frida_scripts(device_type="samsung"):
 
         if not (ok1 and ok2):
             print("Frida ready timeout or failure (Pixel).")
+            print("proc1 tail:\n", out1)
+            print("proc2 tail:\n", out2)
+            return False
+    
+    elif device_type == "moto":
+        print(f"Starting Frida for Moto device...")
+
+        # gsm_dial for Moto (hook com.android.phone)
+        try:
+            proc1 = subprocess.Popen(
+                ['frida', '-U', '-n', 'com.android.phone', '-l', MOTO_GSM_DIAL_SCRIPT],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=False,
+                bufsize=0
+            )
+            frida_processes.append(proc1)
+            print(f"Started frida for com.android.phone (Moto) (PID: {proc1.pid})")
+        except Exception as e:
+            print(f"Error starting Moto gsm_dial script: {e}")
+            return False
+
+        time.sleep(1)
+
+        # imsservice for Moto (✅ 修正: hook org.codeaurora.ims)
+        try:
+            proc2 = subprocess.Popen(
+                ['frida', '-U', '-n', 'org.codeaurora.ims', '-l', MOTO_IMSSERVICE_SCRIPT],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=False,
+                bufsize=0
+            )
+            frida_processes.append(proc2)
+            print(f"Started frida for org.codeaurora.ims (Moto) (PID: {proc2.pid})")
+        except Exception as e:
+            print(f"Error starting Moto imsservice script: {e}")
+            return False
+
+        # Wait for ready markers
+        ok1, out1 = wait_for_marker(proc1, "FRIDA_READY:moto_void_gsm_dial", timeout_s=2.0)
+        ok2, out2 = wait_for_marker(proc2, "FRIDA_READY:moto_void_imssenderrxr", timeout_s=2.0)
+
+        if not (ok1 and ok2):
+            print("Frida ready timeout or failure (Moto).")
+            print("ok1:", ok1, ", ok2:", ok2)
             print("proc1 tail:\n", out1)
             print("proc2 tail:\n", out2)
             return False
@@ -680,16 +744,18 @@ def wait_for_block():
                 
             if rlist:
                 try:
-                    # Use os.read() for non-blocking fd (readline() doesn't work well with non-blocking)
                     chunk = os.read(fd, 4096)
                     if not chunk:
                         continue
                     
-                    # Accumulate in buffer
                     proc_buffers[id(proc)] += chunk
-                    
-                    # Check if buffer contains BLOCKED marker
                     buf_str = proc_buffers[id(proc)].decode('utf-8', errors='replace')
+                    
+                    # ✅ Debug: 輸出最近收到的內容
+                    recent_lines = buf_str.split('\n')[-5:]  # Last 5 lines
+                    for line in recent_lines:
+                        if line.strip():
+                            print(f"[DEBUG] Frida output: {line.strip()}")
                     if "BLOCKED:" in buf_str:
                         # Extract the line containing BLOCKED:
                         for line in buf_str.split('\n'):

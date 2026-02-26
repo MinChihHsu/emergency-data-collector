@@ -40,13 +40,13 @@ Java.perform(function() {
             var stateStr = state.toString();
 
             // 偵測 ALERTING (Ringing / Session Progress)
-            if (stateStr.indexOf("ALERTING") > -1) {
+            if (stateStr.indexOf("ALERTING") > -1 || stateStr.indexOf("DIALING") > -1) {
 
                 if (!isHangingUp) {
                     // Output to logcat
-                    logInfo("Outgoing WiFi call state changed to ALERTING!");
-                    console.log("[!!!] ALERTING detected! Initiating IMMEDIATE terminate...");
-                    console.log("[!] ===== BLOCKED: WiFi Calling state changed to ALERTING =====");
+                    logInfo("Outgoing WiFi call state changed to ALERTING or DIALING!");
+                    console.log("[!!!] ALERTING or DIALING detected! Initiating IMMEDIATE terminate...");
+                    console.log("[!] ===== BLOCKED: WiFi Calling state changed to ALERTING or DIALING =====");
                     isHangingUp = true;
 
                     try {

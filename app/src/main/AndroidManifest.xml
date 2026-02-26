@@ -10,6 +10,7 @@
     <!-- ✅ 添加 Foreground Service 權限 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.READ_LOGS" />
 
 
     <!-- auto hang up phone (Android 9+) -->
@@ -46,6 +47,13 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".WaitForBlockService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />  <!-- ✅ 改成 dataSync -->
+
 
     </application>
 
