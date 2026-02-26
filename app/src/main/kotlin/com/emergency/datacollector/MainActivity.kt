@@ -348,6 +348,11 @@ class MainActivity : AppCompatActivity() {
     private fun initEndCallButtonCoordinates() {
         // Set coordinates based on device model
         when {
+            modelName.contains("22081212UG", ignoreCase = true) -> {
+                // Xiaomi 12T Pro
+                endCallButtonX = 630
+                endCallButtonY = 2371
+            }
             modelName.contains("moto", ignoreCase = true) -> {
                 endCallButtonX = 525
                 endCallButtonY = 2215
@@ -854,6 +859,7 @@ class MainActivity : AppCompatActivity() {
         return when {
             modelName.contains("Pixel", ignoreCase = true) -> "pixel"
             modelName.contains("moto", ignoreCase = true) -> "moto"
+            modelName.contains("22081212UG", ignoreCase = true) -> "moto"  // Xiaomi 12T Pro
             else -> "samsung"
         }
     }
@@ -906,6 +912,7 @@ class MainActivity : AppCompatActivity() {
             modelName.contains("SM-S93", ignoreCase = true) -> "qc"  // S25 series
             modelName.contains("Pixel", ignoreCase = true) -> "sec"   // Google Pixel
             modelName.contains("moto", ignoreCase = true) -> "qc"
+            modelName.contains("22081212UG", ignoreCase = true) -> "qc"  // Xiaomi 12T Pro
             else -> "qc"  // Default to Qualcomm
         }
     }
@@ -1585,6 +1592,8 @@ class MainActivity : AppCompatActivity() {
             modelName.contains("Pixel-7", ignoreCase = true) -> 182
             // ✅ 新增 Moto 支援
             modelName.contains("moto", ignoreCase = true) -> 182
+            // Xiaomi 12T Pro
+            modelName.contains("22081212UG", ignoreCase = true) -> 182
             // For other models, default to S21 code
             else -> 193
         }
@@ -2635,7 +2644,6 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-}
     // ===== GCS Log Upload =====
 
     companion object {
