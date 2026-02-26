@@ -46,3 +46,6 @@ Thumbs.db
 # Kotlin
 *.kotlin_module
 scat_output/
+
+# gcs json
+app/src/main/assets/gcs_service_account.json

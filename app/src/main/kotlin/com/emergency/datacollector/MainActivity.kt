@@ -28,12 +28,19 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.io.File
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.KeyFactory
+import java.security.MessageDigest
+import java.security.Signature
+import java.security.spec.PKCS8EncodedKeySpec
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.concurrent.thread
 import kotlin.math.abs
+import android.util.Base64
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -55,6 +62,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTestNormalCall: Button
     private lateinit var btnUpdateMccMnc: Button
     private lateinit var txtFileSize: TextView
+    private lateinit var btnUploadLogs: Button
+    private var isUploading = false
 
 
     // Configuration
@@ -415,6 +424,7 @@ class MainActivity : AppCompatActivity() {
         btnTestNormalCall = findViewById(R.id.btnTestNormalCall)
         btnUpdateMccMnc = findViewById(R.id.btnUpdateMccMnc)
         txtFileSize = findViewById(R.id.txtFileSize)
+        btnUploadLogs = findViewById(R.id.btnUploadLogs)
 
 
         val experimentOptions = (1..10).toList()
@@ -551,6 +561,14 @@ class MainActivity : AppCompatActivity() {
             updateFileSize()
         }
 
+        btnUploadLogs.setOnClickListener {
+            if (!isUploading) {
+                uploadAllLogs()
+            } else {
+                Toast.makeText(this, "Upload already in progress...", Toast.LENGTH_SHORT).show()
+            }
+        }
+
         if (!checkPermissions()) {
             requestPermissions()
         } else {
@@ -652,39 +670,48 @@ class MainActivity : AppCompatActivity() {
     // ===== MCC/MNC and Country Code =====
 
     private fun updateMccMnc() {
-        try {
-            val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-            
-            // MCC+MNC
-            val networkOperator = telephonyManager.networkOperator
-            if (networkOperator.isNotEmpty() && networkOperator.length >= 5) {
-                mccMnc = networkOperator
-            } else {
-                mccMnc = "000000"
-            }
-            txtMccMnc.text = mccMnc
-            
-            // operator name: first try CSV lookup, fallback to TelephonyManager
-            val csvBrand = MccMncLookup.getBrand(mccMnc)
-            val netOpName = telephonyManager.networkOperatorName
-            operatorName = csvBrand ?: (if (netOpName.isNotEmpty()) netOpName else "Unknown")
-            
-            // get country code (2-letter ISO)
-            val networkCountry = telephonyManager.networkCountryIso
-            if (networkCountry.isNotEmpty()) {
-                countryCode = networkCountry.uppercase()
-            } else {
-                countryCode = "--"
-            }
-            txtCountryCode.text = countryCode
-            
-        } catch (e: Exception) {
+    try {
+        val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+
+        // MCC+MNC: prefer SIM card value (updates immediately on SIM swap),
+        // fallback to network operator (may lag on Samsung Knox after SIM swap)
+        val simOp = telephonyManager.simOperator
+        val networkOperator = if (simOp.isNotEmpty()) simOp else telephonyManager.networkOperator
+        if (networkOperator.isNotEmpty() && networkOperator.length >= 5) {
+            mccMnc = networkOperator
+        } else {
             mccMnc = "000000"
-            countryCode = "--"
-            txtMccMnc.text = mccMnc
-            txtCountryCode.text = countryCode
         }
+        txtMccMnc.text = mccMnc
+
+        // operator name: CSV lookup → simOperatorName → networkOperatorName
+        val csvBrand = MccMncLookup.getBrand(mccMnc)
+        val simOpName = telephonyManager.simOperatorName
+        val netOpName = telephonyManager.networkOperatorName
+        operatorName = csvBrand ?: when {
+            simOpName.isNotEmpty() -> simOpName
+            netOpName.isNotEmpty() -> netOpName
+            else -> "Unknown"
+        }
+
+        // country code: prefer SIM country, fallback to network country
+        val simCountry = telephonyManager.simCountryIso
+        val networkCountry = telephonyManager.networkCountryIso
+        val country = if (simCountry.isNotEmpty()) simCountry else networkCountry
+        if (country.isNotEmpty()) {
+            countryCode = country.uppercase()
+        } else {
+            countryCode = "--"
+        }
+        txtCountryCode.text = countryCode
+
+    } catch (e: Exception) {
+        mccMnc = "000000"
+        countryCode = "--"
+        txtMccMnc.text = mccMnc
+        txtCountryCode.text = countryCode
     }
+}
     
     // ===== Main Collection Flow =====
     
@@ -1551,7 +1578,7 @@ class MainActivity : AppCompatActivity() {
             // S20 series
             modelName.contains("SM-G98", ignoreCase = true) -> 193
             // Pixel 10
-            modelName.contains("Pixel-10", ignoreCase = true) -> 185
+            modelName.contains("Pixel-10", ignoreCase = true) -> 165// update since it changed after re-root
             // Pixel 9
             modelName.contains("Pixel-9", ignoreCase = true) -> 185
             // Pixel 7
@@ -2609,3 +2636,297 @@ class MainActivity : AppCompatActivity() {
 
 
 }
+    // ===== GCS Log Upload =====
+
+    companion object {
+        // Change this to your GCS bucket name
+        private const val GCS_BUCKET = "emergency-data-collector-logs"
+        private const val GCS_SCOPE = "https://www.googleapis.com/auth/devstorage.read_write"
+        private const val GCS_TOKEN_URL = "https://oauth2.googleapis.com/token"
+    }
+
+    // Cached token: Pair<token, expiry epoch ms>
+    private var gcsTokenCache: Pair<String, Long>? = null
+
+    /**
+     * Compute MD5 of a file and return as Base64 string (standard, for Content-MD5 header).
+     */
+    private fun computeMd5Base64(file: File): String {
+        val md = MessageDigest.getInstance("MD5")
+        file.inputStream().use { stream ->
+            val buf = ByteArray(8192)
+            var n: Int
+            while (stream.read(buf).also { n = it } != -1) {
+                md.update(buf, 0, n)
+            }
+        }
+        return Base64.encodeToString(md.digest(), Base64.NO_WRAP)
+    }
+
+    /**
+     * Get a GCS OAuth2 access token using the Service Account JSON key in assets.
+     * Builds a JWT, signs it with RSA-SHA256, and exchanges it for a bearer token.
+     * Token is cached for ~50 minutes (expires in 60).
+     */
+    private fun getGcsAccessToken(): String {
+        // Return cached token if still valid
+        gcsTokenCache?.let { (token, expiry) ->
+            if (System.currentTimeMillis() < expiry) return token
+        }
+
+        // Read service account JSON from assets
+        val saJson = try {
+            assets.open("gcs_service_account.json").bufferedReader().readText()
+        } catch (e: Exception) {
+            throw RuntimeException("Cannot read gcs_service_account.json from assets: ${e.message}")
+        }
+
+        val sa = JSONObject(saJson)
+        val clientEmail = sa.getString("client_email")
+        val rawPrivateKey = sa.getString("private_key")
+
+        // Strip PEM headers and decode
+        val cleanKey = rawPrivateKey
+            .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+            .replace("-----END RSA PRIVATE KEY-----", "")
+            .replace("-----BEGIN PRIVATE KEY-----", "")
+            .replace("-----END PRIVATE KEY-----", "")
+            .replace("\\n", "")
+            .replace("\n", "")
+            .trim()
+        val keyBytes = Base64.decode(cleanKey, Base64.DEFAULT)
+        val privateKey = KeyFactory.getInstance("RSA")
+            .generatePrivate(PKCS8EncodedKeySpec(keyBytes))
+
+        // Build JWT header + claims
+        val nowSec = System.currentTimeMillis() / 1000
+        val header = Base64.encodeToString(
+            """{"alg":"RS256","typ":"JWT"}""".toByteArray(), Base64.NO_WRAP or Base64.URL_SAFE
+        )
+        val claims = Base64.encodeToString(
+            """{
+                "iss":"$clientEmail",
+                "scope":"$GCS_SCOPE",
+                "aud":"$GCS_TOKEN_URL",
+                "iat":$nowSec,
+                "exp":${nowSec + 3600}
+            }""".trimIndent().toByteArray(), Base64.NO_WRAP or Base64.URL_SAFE
+        )
+        val jwtUnsigned = "$header.$claims"
+
+        // Sign with RSA-SHA256
+        val sig = Signature.getInstance("SHA256withRSA").apply {
+            initSign(privateKey)
+            update(jwtUnsigned.toByteArray())
+        }
+        val signatureB64 = Base64.encodeToString(sig.sign(), Base64.NO_WRAP or Base64.URL_SAFE)
+        val jwt = "$jwtUnsigned.$signatureB64"
+
+        // Exchange JWT for access token
+        val tokenUrl = URL(GCS_TOKEN_URL)
+        val conn = (tokenUrl.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            connectTimeout = 15000
+            readTimeout = 15000
+        }
+        val body = "grant_type=${java.net.URLEncoder.encode("urn:ietf:params:oauth:grant-type:jwt-bearer", "UTF-8")}&assertion=$jwt"
+        OutputStreamWriter(conn.outputStream).use { it.write(body) }
+
+        val responseCode = conn.responseCode
+        val responseText = (if (responseCode in 200..299) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.readText() ?: ""
+        conn.disconnect()
+
+        if (responseCode !in 200..299) {
+            throw RuntimeException("GCS token request failed ($responseCode): $responseText")
+        }
+
+        val token = JSONObject(responseText).getString("access_token")
+        // Cache for 50 minutes (token valid 60 min)
+        gcsTokenCache = Pair(token, System.currentTimeMillis() + 50 * 60 * 1000)
+        return token
+    }
+
+    /**
+     * Upload a single file to GCS.
+     * Uses PUT with Content-MD5 header — GCS will reject the upload (400) if MD5 doesn't match.
+     * Object is stored under {deviceId}/{filename} to avoid collisions between users.
+     */
+    private fun uploadSingleFileToGcs(file: File, token: String): Boolean {
+    // Log files may be owned by root (written via su). Ensure they're readable first.
+    if (!file.canRead()) {
+        try {
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "chmod +r \"${file.absolutePath}\"")).waitFor()
+        } catch (e: Exception) {
+            Log.w("GCSUpload", "chmod failed for ${file.name}: ${e.message}")
+        }
+    }
+    val md5 = computeMd5Base64(file)
+        // Folder = everything from filename start up to (and including) the date token
+        // e.g. TW_Chunghwa_Pixel_10_6770fca51d658278_20260223
+        val parts = file.nameWithoutExtension.split("_")
+        val dateIdx = parts.indexOfFirst { it.matches(Regex("^\\d{8}$")) }
+        val folderName = if (dateIdx > 0) {
+            parts.subList(0, dateIdx + 1).joinToString("_")
+        } else {
+            // Fallback: build from current device info
+            val today = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
+            "${countryCode}_${operatorName.replace(" ", "")}_${modelName.replace(" ", "_")}_${deviceId}_${today}"
+        }
+        val objectName = java.net.URLEncoder.encode("$folderName/${file.name}", "UTF-8")
+        val uploadUrl = "https://storage.googleapis.com/upload/storage/v1/b/$GCS_BUCKET/o" +
+                "?uploadType=media&name=$objectName"
+
+        val conn = (URL(uploadUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/octet-stream")
+            setRequestProperty("Content-MD5", md5)
+            setRequestProperty("Content-Length", file.length().toString())
+            connectTimeout = 30000
+            readTimeout = 120000  // large files may take a while
+        }
+
+        return try {
+            file.inputStream().use { input ->
+                conn.outputStream.use { output ->
+                    input.copyTo(output, bufferSize = 65536)
+                }
+            }
+            val code = conn.responseCode
+            val resp = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.readText() ?: ""
+            conn.disconnect()
+
+            if (code in 200..299) {
+                Log.d("GCSUpload", "✅ Uploaded: ${file.name} (MD5: $md5)")
+                true
+            } else {
+                Log.e("GCSUpload", "❌ Upload failed (${code}) ${file.name}: $resp")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("GCSUpload", "❌ Upload exception ${file.name}: ${e.message}")
+            conn.disconnect()
+            false
+        }
+    }
+
+    /**
+     * Main upload entry point:
+     * 1. Scan log directory for all files
+     * 2. Filter out already-uploaded files (SharedPreferences)
+     * 3. Get GCS access token
+     * 4. Upload each file; mark as uploaded on success
+     * 5. Update UI with results
+     */
+    private fun uploadAllLogs() {
+        isUploading = true
+        btnUploadLogs.isEnabled = false
+        btnUploadLogs.text = "Uploading..."
+        appendLog("=== Starting Cloud Upload ===")
+
+        thread {
+        try {
+            val logDir = getExternalFilesDir(null)
+            if (logDir == null || !logDir.exists()) {
+                handler.post {
+                    appendLog("❌ Upload error: log directory not found")
+                    isUploading = false
+                    btnUploadLogs.isEnabled = true
+                    btnUploadLogs.text = "Upload Logs to Cloud"
+                }
+                return@thread
+            }
+
+            // Gather all files (non-recursive)
+            val allFiles = logDir.walkTopDown()
+                .filter { it.isFile }
+                .toList()
+
+            // Load set of already-uploaded filenames from SharedPreferences
+            val uploadedSet = prefs.getStringSet("uploaded_files", emptySet())!!.toMutableSet()
+
+            val toUpload = allFiles.filter { it.name !in uploadedSet }
+
+            handler.post {
+                appendLog("Found ${allFiles.size} files total, ${toUpload.size} need uploading")
+            }
+
+            if (toUpload.isEmpty()) {
+                handler.post {
+                    appendLog("✅ Nothing to upload — all files already uploaded")
+                    Toast.makeText(this, "All files already uploaded!", Toast.LENGTH_SHORT).show()
+                    isUploading = false
+                    btnUploadLogs.isEnabled = true
+                    btnUploadLogs.text = "Upload Logs to Cloud"
+                }
+                return@thread
+            }
+
+            // Get access token — catch Throwable (not just Exception) for crypto errors
+            val token: String
+            try {
+                token = getGcsAccessToken()
+            } catch (t: Throwable) {
+                handler.post {
+                    appendLog("❌ GCS auth failed: ${t.javaClass.simpleName}: ${t.message}")
+                    appendLog("Make sure gcs_service_account.json is a real key (not placeholder)")
+                    Toast.makeText(this, "Upload failed: auth error", Toast.LENGTH_LONG).show()
+                    isUploading = false
+                    btnUploadLogs.isEnabled = true
+                    btnUploadLogs.text = "Upload Logs to Cloud"
+                }
+                return@thread
+            }
+
+            var successCount = 0
+            var failCount = 0
+
+            for ((index, file) in toUpload.withIndex()) {
+                handler.post {
+                    appendLog("[${index + 1}/${toUpload.size}] Uploading: ${file.name}")
+                    btnUploadLogs.text = "⏳ ${index + 1}/${toUpload.size}"
+                }
+
+                val ok = uploadSingleFileToGcs(file, token)
+                if (ok) {
+                    successCount++
+                    uploadedSet.add(file.name)
+                    // Persist after each successful upload (safe against mid-upload crash)
+                    prefs.edit().putStringSet("uploaded_files", uploadedSet.toSet()).apply()
+                    handler.post { appendLog("  ✅ ${file.name}") }
+                } else {
+                    failCount++
+                    handler.post { appendLog("  ❌ ${file.name} failed") }
+                }
+            }
+
+            handler.post {
+                val summary = "Upload done: $successCount uploaded, $failCount failed"
+                appendLog("=== $summary ===")
+                Toast.makeText(this, summary, Toast.LENGTH_LONG).show()
+                isUploading = false
+                btnUploadLogs.isEnabled = true
+                btnUploadLogs.text = "Upload Logs to Cloud"
+                updateFileSize()
+            }
+
+        } catch (t: Throwable) {
+            // Global catch — prevents silent crash, shows error in app log
+            handler.post {
+                appendLog("❌ Upload crashed: ${t.javaClass.simpleName}: ${t.message}")
+                Log.e("GCSUpload", "Upload thread crashed", t)
+                Toast.makeText(this, "Upload crashed: ${t.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                isUploading = false
+                btnUploadLogs.isEnabled = true
+                btnUploadLogs.text = "Upload Logs to Cloud"
+            }
+        }
+    }
+}   // uploadAllLogs
+
+}   // MainActivity
