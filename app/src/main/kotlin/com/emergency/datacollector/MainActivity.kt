@@ -367,6 +367,11 @@ class MainActivity : AppCompatActivity() {
                 endCallButtonX = 585
                 endCallButtonY = 2012
             }
+            modelName.contains("SM-S926", ignoreCase = true) -> {
+                // Samsung S24+
+                endCallButtonX = 547
+                endCallButtonY = 1961
+            }
             else -> {
                 // Default (Samsung S21)
                 endCallButtonX = 585
@@ -2144,8 +2149,17 @@ class MainActivity : AppCompatActivity() {
             // 1) If tcpdump already exists and is executable (check as root)
             val (_, outCheck) = runSuRoot("sh -c 'test -x \"$target\"; echo \$?'")
             if (outCheck.trim().endsWith("0")) {
-                appendLog("tcpdump binary already exists: $target")
-                return true
+                // Verify it actually runs (catches wrong architecture / SELinux issues)
+                val (_, verOut) = runSuRoot("sh -c '$target --version >/dev/null 2>&1; echo \$?'")
+                val innerExit = verOut.trim().lines().lastOrNull()?.trim()
+                if (innerExit == "0") {
+                    appendLog("tcpdump binary already exists: $target")
+                    return true
+                } else {
+                    // Binary exists but can't run — delete and reinstall
+                    appendLog("tcpdump binary exists but fails to run (exit=$innerExit). Deleting and reinstalling...")
+                    runSuRoot("rm -f \"$target\"")
+                }
             }
 
             // 2) Pick asset by ABI
