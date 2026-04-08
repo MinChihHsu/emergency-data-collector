@@ -1241,7 +1241,6 @@ class MainActivity : AppCompatActivity() {
         val cmd = "/data/local/tmp/pcscf_probing -i $iface $srcArg -p $pcscfList"
         appendLog("Running: $cmd")
 
-        // Summary 行的判斷條件：只把這些前綴/關鍵字傳給 appendLog
         fun isSummaryLine(line: String): Boolean {
             val trimmed = line.trim()
             return trimmed.startsWith("[INFO]") ||
@@ -1250,11 +1249,10 @@ class MainActivity : AppCompatActivity() {
                     trimmed.startsWith("[Phase 2] UDP TTL sweep") ||
                     trimmed.startsWith("[Phase 2] Burst:") ||
                     trimmed.startsWith("[Phase 2] Burst complete:") ||
-                    trimmed.startsWith("┌─") ||
-                    trimmed.startsWith("│") ||
-                    trimmed.startsWith("└─") ||
+                    trimmed.startsWith("==========") ||   // ← 取代原本的 ┌─ │ └─
                     trimmed.startsWith("[DONE]")
         }
+
 
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))

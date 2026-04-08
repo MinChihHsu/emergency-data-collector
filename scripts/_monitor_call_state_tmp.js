@@ -14,8 +14,6 @@ Java.perform(function() {
         console.log("FRIDA_ERROR:" + id + ":" + msg);
     }
 
-    // SCENARIO is defined at file scope by the server-generated wrapper.
-    // Sanity check + fallback only for direct manual invocation.
     var scenario = (typeof SCENARIO === 'number') ? SCENARIO : 3;
 
     logInfo("Frida WiFi Call monitor started, scenario=" + scenario);
@@ -27,19 +25,21 @@ Java.perform(function() {
         var ImsPhoneCallTracker = Java.use(
             "com.android.internal.telephony.imsphone.ImsPhoneCallTracker"
         );
-        var StateClass = "com.android.internal.telephony.Call$State";
-        var ImsCall    = "com.android.ims.ImsCall";
+        // ✅ 改用 Java.use 物件，不用字串
+        var ImsCallClass  = Java.use("com.android.ims.ImsCall");
+        var CallStateClass = Java.use("com.android.internal.telephony.Call$State");
 
         var isHangingUp = false;
 
         ImsPhoneCallTracker.processCallStateChange.overload(
-            ImsCall, StateClass, 'int'
+            "com.android.ims.ImsCall",
+            "com.android.internal.telephony.Call$State",
+            "int"
         ).implementation = function(imsCall, state, cause) {
 
             var stateStr = state.toString();
 
             if (scenario === 3) {
-                // ── Scenario 3: terminate on ALERTING/DIALING ────────────────
                 if ((stateStr.indexOf("ALERTING") > -1 ||
                      stateStr.indexOf("DIALING")  > -1) && !isHangingUp) {
 
@@ -62,7 +62,6 @@ Java.perform(function() {
                 }
 
             } else {
-                // ── Scenario 5: wait for ACTIVE/CONNECTED ────────────────────
                 if ((stateStr.indexOf("ACTIVE")    > -1 ||
                      stateStr.indexOf("CONNECTED") > -1) && !isHangingUp) {
 
@@ -91,3 +90,4 @@ Java.perform(function() {
         reportError("wifi_call_monitoring", e);
     }
 });
+
