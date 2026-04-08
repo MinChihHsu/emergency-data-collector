@@ -40,7 +40,7 @@ PIXEL_CALLSESSION_SCRIPT = os.path.join(SCRIPT_DIR, "pixel9_void_callsessionadap
 
 # Moto Frida scripts
 MOTO_GSM_DIAL_SCRIPT = os.path.join(SCRIPT_DIR, "moto_void_gsm_dial.js")
-MOTO_IMSSERVICE_SCRIPT = os.path.join(SCRIPT_DIR, "moto_void_imsserderrxr.js")
+MOTO_IMSSERVICE_SCRIPT = os.path.join(SCRIPT_DIR, "moto_void_hidl_imsradio_proxy.js")
 
 
 # Pixel Satellite Frida script
@@ -363,7 +363,7 @@ def start_frida_scripts(device_type="samsung"):
 
         # Wait for ready markers
         ok1, out1 = wait_for_marker(proc1, "FRIDA_READY:moto_void_gsm_dial", timeout_s=2.0)
-        ok2, out2 = wait_for_marker(proc2, "FRIDA_READY:moto_void_imssenderrxr", timeout_s=2.0)
+        ok2, out2 = wait_for_marker(proc2, "FRIDA_READY:moto_void_hidl_imsradio_proxy", timeout_s=2.0)
 
         if not (ok1 and ok2):
             print("Frida ready timeout or failure (Moto).")
@@ -532,10 +532,10 @@ def start_scat(modem_type, filename):
     # Build scat command based on modem type
     # For sec (Pixel/Exynos): add --start-magic flag
     if modem_type == "sec":
-        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-L', 'ip,nas,rrc,pdcp,rlc,mac', '-a', usb_port, '-i', '0',
+        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-L', 'ip,nas,rrc,pdcp,rlc,mac', '-a', usb_port, '-i', '0', '-C', 
                '--start-magic', '0x34dc12fe', '-F', output_file]
     else:
-        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-L', 'ip,nas,rrc,pdcp,rlc,mac', '-a', usb_port, '-i', '0', '-F', output_file]
+        cmd = ['sudo', 'scat', '-t', modem_type, '-u', '-L', 'ip,nas,rrc,pdcp,rlc,mac', '-a', usb_port, '-i', '0', '-C', '-F', output_file]
 
     print(f"Starting scat: {' '.join(cmd)}")
 
@@ -663,45 +663,80 @@ def start_frida_satellite_endpoint():
 @app.route('/start-frida-wificalling', methods=['POST'])
 def start_frida_wificalling():
     """
-    Start Frida WiFi Calling monitor script for Scenario #3.
-    Hooks com.android.phone to detect ALERTING state and terminate call immediately.
+    Start Frida WiFi Calling monitor script.
+    Scenario 3: terminate on ALERTING/DIALING, emits BLOCKED:
+    Scenario 5: notify on ACTIVE/CONNECTED only, emits CALL_CONNECTED:
+
+    The scenario value is baked directly into a generated wrapper script,
+    avoiding all cross-script scope issues with -e + -l in Frida 17.x.
     """
     print("\n=== Received: /start-frida-wificalling ===")
+
+    data = request.get_json() or {}
+    scenario = int(data.get('scenario', 3))
+    print(f"scenario: {scenario}")
 
     global frida_processes
 
     kill_frida_processes()
     time.sleep(0.5)
 
-    # Ensure com.android.phone is running before attempting to attach
     if not ensure_process_running("com.android.phone"):
         print("Cannot start Frida WiFi calling: phone process not available")
         return jsonify({"status": "error", "message": "Phone process not available"}), 500
 
-    print("Starting Frida WiFi calling monitor script...")
+    # ── Read the base script ──────────────────────────────────────────────────
+    base_script_path = os.path.join(SCRIPT_DIR, 'monitor_call_state.js')
+    try:
+        with open(base_script_path, 'r') as f:
+            base_script = f.read()
+    except Exception as e:
+        print(f"Cannot read monitor_call_state.js: {e}")
+        return jsonify({"status": "error", "message": f"Cannot read script: {e}"}), 500
+
+    # ── Prepend scenario as a true JS global in the SAME script context ───────
+    # This guarantees SCENARIO is defined before Java.perform() runs.
+    injected_script = f"var SCENARIO = {scenario};\n" + base_script
+
+    # ── Write to a temp file so frida -l can load it ─────────────────────────
+    tmp_script_path = os.path.join(SCRIPT_DIR, '_monitor_call_state_tmp.js')
+    try:
+        with open(tmp_script_path, 'w') as f:
+            f.write(injected_script)
+    except Exception as e:
+        print(f"Cannot write temp script: {e}")
+        return jsonify({"status": "error", "message": f"Cannot write temp script: {e}"}), 500
+
+    print(f"Starting Frida WiFi calling monitor script (scenario={scenario})...")
+    print(f"Temp script written to: {tmp_script_path}")
 
     try:
         proc = subprocess.Popen(
-            ['frida', '-U', '-n', 'com.android.phone', '-l', os.path.join(SCRIPT_DIR, 'monitor_call_state.js')],
+            [
+                'frida', '-U', '-n', 'com.android.phone',
+                '-l', tmp_script_path,   # single script with SCENARIO baked in
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=False,
             bufsize=0
         )
         frida_processes.append(proc)
-        print(f"Started frida WiFi calling monitor for com.android.phone (PID: {proc.pid})")
+        print(f"Started frida WiFi calling monitor (PID: {proc.pid}), SCENARIO={scenario}")
     except Exception as e:
         print(f"Error starting WiFi calling frida script: {e}")
         return jsonify({"status": "error", "message": f"Failed to start: {e}"}), 500
 
-    # Wait for FRIDA_READY marker
-    ok, out = wait_for_marker(proc, "FRIDA_READY:wifi_call_monitoring", timeout_s=2.0)
+    ok, out = wait_for_marker(proc, "FRIDA_READY:wifi_call_monitoring", timeout_s=5.0)
     if not ok:
         print("Frida ready timeout or failure (WiFi Calling).")
         print("proc tail:\n", out)
-        return jsonify({"status": "error", "message": "Frida script not ready"}), 500
+        return jsonify({"status": "error", "message": "Frida script not ready", "detail": out}), 500
 
-    return jsonify({"status": "ok", "message": "Frida WiFi calling monitor started"}), 200
+    return jsonify({
+        "status": "ok",
+        "message": f"Frida WiFi calling monitor started (scenario={scenario})"
+    }), 200
 
 
 @app.route('/wait-for-block', methods=['POST'])
@@ -756,18 +791,29 @@ def wait_for_block():
                     for line in recent_lines:
                         if line.strip():
                             print(f"[DEBUG] Frida output: {line.strip()}")
-                    if "BLOCKED:" in buf_str:
-                        # Extract the line containing BLOCKED:
-                        for line in buf_str.split('\n'):
-                            if "BLOCKED:" in line:
-                                print(f"*** CALL BLOCKED: {line.strip()}")
-                                return jsonify({
-                                    "status": "ok",
-                                    "message": "Call blocked by Frida",
-                                    "blocked": True,
-                                    "detail": line.strip()
-                                }), 200
-                    
+                                        # Scenario 3: BLOCKED — Scenario 5: CALL_CONNECTED (then wait 30s)
+                    for marker, event_type in [("BLOCKED:", "blocked"), ("CALL_CONNECTED:", "connected")]:
+                        if marker in buf_str:
+                            for line in buf_str.split('\n'):
+                                if marker in line:
+                                    print(f"*** {event_type.upper()}: {line.strip()}")
+
+                                    if event_type == "connected":
+                                        # ── Scenario 5: call answered, hold 30s then return ──
+                                        # App will hang up immediately after receiving this response.
+                                        print("[Scenario 5] CALL_CONNECTED: waiting 30s before returning...")
+                                        time.sleep(30)
+                                        print("[Scenario 5] 30s elapsed, returning to app.")
+
+                                    return jsonify({
+                                        "status": "ok",
+                                        "message": f"Call {event_type} detected by Frida",
+                                        "blocked": True,
+                                        "event": event_type,
+                                        "detail": line.strip()
+                                    }), 200
+
+
                     # Prevent unbounded growth - keep last 50KB
                     if len(proc_buffers[id(proc)]) > 50000:
                         proc_buffers[id(proc)] = proc_buffers[id(proc)][-25000:]
@@ -789,20 +835,31 @@ def wait_for_block():
         "blocked": False
     }), 200
 
-
 @app.route('/pkill-phone', methods=['POST'])
 def pkill_phone():
     print("\n=== Received: /pkill-phone ===")
 
     kill_frida_processes()
 
-    # pkill com.android.phone
+    # pkill com.android.phone (根據設備類型使用不同命令)
     print("Sending pkill command...")
-    result = subprocess.run(
-        ['adb', 'shell', 'su', '-c', 'pkill -f com.android.phone'],
-        capture_output=True,
-        text=True
-    )
+    
+    # 判斷當前設備類型，如果是 moto 則使用 pkill -9
+    if current_device_type == "moto":
+        print("Using pkill -9 for Moto device...")
+        result = subprocess.run(
+            ['adb', 'shell', 'su', '-c', 'pkill -9 phone'],
+            capture_output=True,
+            text=True
+        )
+    else:
+        # 其他設備照舊
+        result = subprocess.run(
+            ['adb', 'shell', 'su', '-c', 'pkill -f com.android.phone'],
+            capture_output=True,
+            text=True
+        )
+    
     print(f"pkill result: {result.returncode}")
 
     return jsonify({

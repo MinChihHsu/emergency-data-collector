@@ -1,89 +1,92 @@
+// monitor_call_state.js
+// SCENARIO is injected at the top of this file by frida_server.py before loading.
+// Do NOT define SCENARIO here — it is prepended dynamically.
+
 Java.perform(function() {
-    console.log("[*] Hooking ImsPhoneCallTracker.processCallStateChange...");
-    // Get Android Log class for logcat output
     var Log = Java.use("android.util.Log");
     var TAG = "frida-wifi-call-notifier";
 
-    // Helper function to output debug log to logcat
-    function logInfo(message) {
-        Log.i(TAG, message);
-    }
-
-    function reportReady(id) {
-        console.log("FRIDA_READY:" + id);
-    }
-
+    function logInfo(message) { Log.i(TAG, message); }
+    function reportReady(id) { console.log("FRIDA_READY:" + id); }
     function reportError(id, e) {
         var msg = (e && e.stack) ? e.stack : ("" + e);
         console.log("FRIDA_ERROR:" + id + ":" + msg);
     }
 
-    logInfo("Frida WiFi Call notifier script started");
+    // SCENARIO is defined at file scope by the server-generated wrapper.
+    // Sanity check + fallback only for direct manual invocation.
+    var scenario = (typeof SCENARIO === 'number') ? SCENARIO : 3;
+
+    logInfo("Frida WiFi Call monitor started, scenario=" + scenario);
+    console.log("[*] monitor_call_state.js: scenario=" + scenario);
+
+    var REASON_USER_TERMINATED = 501;
 
     try {
-        var ImsPhoneCallTracker = Java.use("com.android.internal.telephony.imsphone.ImsPhoneCallTracker");
+        var ImsPhoneCallTracker = Java.use(
+            "com.android.internal.telephony.imsphone.ImsPhoneCallTracker"
+        );
         var StateClass = "com.android.internal.telephony.Call$State";
-        var ImsCall = "com.android.ims.ImsCall";
+        var ImsCall    = "com.android.ims.ImsCall";
 
-        // 用來防止短時間內重複執行掛斷
         var isHangingUp = false;
 
-        // IMS Reason Codes
-        var REASON_USER_TERMINATED = 501;
-
         ImsPhoneCallTracker.processCallStateChange.overload(
-            ImsCall,
-            StateClass,
-            'int'
+            ImsCall, StateClass, 'int'
         ).implementation = function(imsCall, state, cause) {
 
             var stateStr = state.toString();
 
-            // 偵測 ALERTING (Ringing / Session Progress)
-            if (stateStr.indexOf("ALERTING") > -1 || stateStr.indexOf("DIALING") > -1) {
+            if (scenario === 3) {
+                // ── Scenario 3: terminate on ALERTING/DIALING ────────────────
+                if ((stateStr.indexOf("ALERTING") > -1 ||
+                     stateStr.indexOf("DIALING")  > -1) && !isHangingUp) {
 
-                if (!isHangingUp) {
-                    // Output to logcat
-                    logInfo("Outgoing WiFi call state changed to ALERTING or DIALING!");
-                    console.log("[!!!] ALERTING or DIALING detected! Initiating IMMEDIATE terminate...");
-                    console.log("[!] ===== BLOCKED: WiFi Calling state changed to ALERTING or DIALING =====");
                     isHangingUp = true;
+                    logInfo("Scenario 3: state=" + stateStr + " → terminating");
+                    console.log("[!!!] Scenario 3: terminating call on " + stateStr);
+                    console.log("[!] ===== BLOCKED: WiFi Calling state=" + stateStr + " =====");
 
                     try {
                         imsCall.terminate(REASON_USER_TERMINATED, REASON_USER_TERMINATED);
-                        console.log("[V] SUCCESS: imsCall.terminate(501) executed.");
-                    } catch (e) {
+                        console.log("[V] imsCall.terminate(501) executed.");
+                    } catch(e) {
                         console.log("[X] terminate failed: " + e);
-
-                        try {
-                            imsCall.close();
-                            console.log("[?] fallback to imsCall.close()");
-                        } catch(e2) {
-                            // ignore
-                        }
+                        try { imsCall.close(); } catch(_) {}
                     }
-                } else {
-                    console.log("[i] Skipping duplicate ALERTING event (already hanging up).");
+
+                } else if (stateStr.indexOf("DISCONNECTED") > -1) {
+                    console.log("[*] Scenario 3: DISCONNECTED → reset flag");
+                    isHangingUp = false;
                 }
-            } else if (stateStr.indexOf("DISCONNECTED") > -1) {
-                console.log("[*] Call Disconnected. Resetting hangup flag.");
-                isHangingUp = false;
+
+            } else {
+                // ── Scenario 5: wait for ACTIVE/CONNECTED ────────────────────
+                if ((stateStr.indexOf("ACTIVE")    > -1 ||
+                     stateStr.indexOf("CONNECTED") > -1) && !isHangingUp) {
+
+                    isHangingUp = true;
+                    logInfo("Scenario 5: call ACTIVE/CONNECTED");
+                    console.log("[!!!] Scenario 5: call answered!");
+                    console.log("[!] ===== CALL_CONNECTED: state=" + stateStr + " =====");
+
+                } else if (stateStr.indexOf("DISCONNECTED") > -1) {
+                    console.log("[*] Scenario 5: DISCONNECTED → reset flag");
+                    isHangingUp = false;
+                }
             }
 
-            // 務必執行原始方法，維持系統運作
             this.processCallStateChange(imsCall, state, cause);
         };
 
-        // ✅ 修正：reportReady 應該在 hook 成功後立即呼叫
-        logInfo("Successfully hooked ImsPhoneCallTracker.processCallStateChange() - ready to monitor WiFi calls");
+        logInfo("Hook ready (scenario=" + scenario + ")");
         reportReady("wifi_call_monitoring");
 
-        // Start periodic alive message
-        var aliveInterval = setInterval(function() {
-            logInfo("wifi-call-notifier is alive and waiting.");
-        }, 1000); // Every 1 seconds
+        setInterval(function() {
+            logInfo("wifi-call-notifier alive, scenario=" + scenario);
+        }, 5000);
 
-    } catch (e) {
+    } catch(e) {
         reportError("wifi_call_monitoring", e);
     }
 });
