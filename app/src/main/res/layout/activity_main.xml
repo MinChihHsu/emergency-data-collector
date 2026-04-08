@@ -202,6 +202,34 @@
                 android:textSize="13sp"
                 android:checked="true" />
         </LinearLayout>
+        
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="@dimen/section_gap">
+
+            <CheckBox
+                android:id="@+id/checkScenario5"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="#5a: Probing + Call"
+                android:textColor="#000000"
+                android:textSize="13sp"
+                android:checked="false" />
+
+            <CheckBox
+                android:id="@+id/checkScenario5b"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="#5b: Call + Probing"
+                android:textColor="#000000"
+                android:textSize="13sp"
+                android:checked="false" />
+        </LinearLayout>
+
 
         <!-- # of Experiments Row -->
         <LinearLayout

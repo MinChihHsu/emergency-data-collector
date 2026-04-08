@@ -57,6 +57,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var checkScenario2: CheckBox
     private lateinit var checkScenario3: CheckBox
     private lateinit var checkScenario4: CheckBox
+    private lateinit var checkScenario5: CheckBox
+    private lateinit var checkScenario5b: CheckBox
     private lateinit var btnStartExperiment: Button
     private lateinit var btnStopExperiment: Button
     private lateinit var btnTestNormalCall: Button
@@ -89,7 +91,10 @@ class MainActivity : AppCompatActivity() {
     private var runScenario1 = true
     private var runScenario2 = true
     private var runScenario3 = true
-    private var runScenario4 = true
+    private var runScenario4 = false
+    private var runScenario5 = false
+    private var runScenario5b = false
+
     private var isTestNormalCallMode: Boolean = false
 
 
@@ -120,6 +125,10 @@ class MainActivity : AppCompatActivity() {
 
     // ✅ NEW: Data collection tools retry delay (2 seconds)
     private var delayToolsRetry = 2000L
+
+    // ✅ NEW: Delay after probing binary returns (give P-CSCF time to respond)
+    private var delayAfterProbing = 10000L
+
 
     // ===== NEW: IPsec monitoring =====
     private var isMonitoringIpsec = false
@@ -429,6 +438,8 @@ class MainActivity : AppCompatActivity() {
         checkScenario2 = findViewById(R.id.checkScenario2)
         checkScenario3 = findViewById(R.id.checkScenario3)
         checkScenario4 = findViewById(R.id.checkScenario4)
+        checkScenario5 = findViewById(R.id.checkScenario5)
+        checkScenario5b = findViewById(R.id.checkScenario5b)
         btnStartExperiment = findViewById(R.id.btnStartExperiment)
         btnStopExperiment = findViewById(R.id.btnStopExperiment)
         btnTestNormalCall = findViewById(R.id.btnTestNormalCall)
@@ -504,6 +515,8 @@ class MainActivity : AppCompatActivity() {
                 runScenario2 = checkScenario2.isChecked
                 runScenario3 = checkScenario3.isChecked
                 runScenario4 = checkScenario4.isChecked
+                runScenario5 = checkScenario5.isChecked
+                runScenario5b = checkScenario5b.isChecked
                 isTestNormalCallMode = false
                 
                 // ✅ NEW: Check Scenario 3 requires WiFi Calling number
@@ -516,6 +529,28 @@ class MainActivity : AppCompatActivity() {
                 if (runScenario3 && isEmergencyLikeNumber(wifiCallingNumber)) {
                     Toast.makeText(this, "WiFi Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
                     appendLog("Abort: WiFi Calling number is emergency-like: '${normalizeDialNumber(wifiCallingNumber)}'")
+                    return@setOnClickListener
+                }
+
+                if (runScenario5 && wifiCallingNumber.isBlank()) {
+                    Toast.makeText(this, "Scenario #5 requires a Calling number", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: Scenario #5 checked but WiFi Calling number is empty")
+                    return@setOnClickListener
+                }
+                if (runScenario5 && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "Scenario #5 Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: Scenario #5 WiFi Calling number is emergency-like")
+                    return@setOnClickListener
+                }
+                
+                if (runScenario5b && wifiCallingNumber.isBlank()) {
+                    Toast.makeText(this, "Scenario #5b requires a Calling number", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: Scenario #5b checked but WiFi Calling number is empty")
+                    return@setOnClickListener
+                }
+                if (runScenario5b && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "Scenario #5b Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: Scenario #5b WiFi Calling number is emergency-like")
                     return@setOnClickListener
                 }
 
@@ -538,6 +573,8 @@ class MainActivity : AppCompatActivity() {
                 runScenario2 = false // ✅ Test mode ignores Scenario 2
                 runScenario3 = checkScenario3.isChecked
                 runScenario4 = checkScenario4.isChecked
+                runScenario5 = checkScenario5.isChecked
+                runScenario5b = checkScenario5b.isChecked
 
                 // ✅ NEW: Check Scenario 3 requires WiFi Calling number (Test Mode)
                 if (runScenario3 && wifiCallingNumber.isBlank()) {
@@ -555,6 +592,26 @@ class MainActivity : AppCompatActivity() {
                 if ((runScenario1 || runScenario3) && isEmergencyLikeNumber(wifiCallingNumber)) {
                     Toast.makeText(this, "Test blocked: WiFi Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
                     appendLog("Test blocked: WiFi Calling number is emergency-like: '${normalizeDialNumber(wifiCallingNumber)}'")
+                    return@setOnClickListener
+                }
+                if (runScenario5 && wifiCallingNumber.isBlank()) {
+                    Toast.makeText(this, "Scenario #5 requires a Calling number", Toast.LENGTH_LONG).show()
+                    appendLog("Test mode aborted: Scenario #5 checked but WiFi Calling number is empty")
+                    return@setOnClickListener
+                }
+                if (runScenario5 && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "Scenario #5 Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: Scenario #5 WiFi Calling number is emergency-like")
+                    return@setOnClickListener
+                }
+                if (runScenario5b && wifiCallingNumber.isBlank()) {
+                    Toast.makeText(this, "Scenario #5b requires a Calling number", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: Scenario #5b checked but WiFi Calling number is empty")
+                    return@setOnClickListener
+                }
+                if (runScenario5b && isEmergencyLikeNumber(wifiCallingNumber)) {
+                    Toast.makeText(this, "Scenario #5b Calling number cannot be an emergency number.", Toast.LENGTH_LONG).show()
+                    appendLog("Abort: Scenario #5b WiFi Calling number is emergency-like")
                     return@setOnClickListener
                 }
                 setInputsEnabled(false)
@@ -742,12 +799,15 @@ class MainActivity : AppCompatActivity() {
         setInputsEnabled(false)
         
         appendLog("=== Starting Full Collection ===")
+        disableScreenTimeout()
         appendLog("Selected scenarios: " + 
             listOfNotNull(
                 if (runScenario1) "1" else null,
                 if (runScenario2) "2" else null,
                 if (runScenario3) "3" else null,
-                if (runScenario4) "4" else null
+                if (runScenario4) "4" else null,
+                if (runScenario5) "5a" else null,
+                if (runScenario5b) "5b" else null   // ← ADD
             ).joinToString(", "))
         appendLog("Measurements per scenario: $totalMeasurementsPerPhase")
         
@@ -771,6 +831,8 @@ class MainActivity : AppCompatActivity() {
             2 -> startPhase2()
             3 -> startPhase3()
             4 -> startPhase4()
+            5 -> startPhase5()
+            6 -> startPhase6()
         }
     }
     
@@ -780,16 +842,20 @@ class MainActivity : AppCompatActivity() {
         if (runScenario2) return 2
         if (runScenario3) return 3
         if (runScenario4) return 4
+        if (runScenario5) return 5
+        if (runScenario5b) return 6
         return null
     }
     
     // next scenario to experiment
     private fun getNextEnabledPhase(currentPhase: Int): Int? {
-        for (phase in (currentPhase + 1)..4) {
+        for (phase in (currentPhase + 1)..6) {
             when (phase) {
                 2 -> if (runScenario2) return 2
                 3 -> if (runScenario3) return 3
                 4 -> if (runScenario4) return 4
+                5 -> if (runScenario5) return 5
+                6 -> if (runScenario5b) return 6
             }
         }
         return null
@@ -972,6 +1038,567 @@ class MainActivity : AppCompatActivity() {
         currentMeasurementCount = 0
         performMeasurement()
     }
+    // ===== Scenario 5: Normal Call + Probing =====
+
+    private fun startPhase5() {
+        appendLog("\n=== Scenario 5a: Active Probing + Normal Call ===")   // ← renamed
+        if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return }
+        currentPhase = 5
+        currentMeasurementCount = 0
+        performMeasurement()
+    }
+
+    // ← ADD THIS NEW FUNCTION
+    private fun startPhase6() {
+        appendLog("\n=== Scenario 5b: Normal Call + Active Probing ===")
+        if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return }
+        currentPhase = 6
+        currentMeasurementCount = 0
+        performMeasurement()
+    }
+
+
+    /**
+     * Ensure the pcscf_probing binary is deployed to /data/local/tmp/pcscf_probing.
+     * Mirrors the pattern of ensureTcpdumpBinary().
+     */
+    private fun ensurePcscfProbingBinary(): Boolean {
+        val target = "/data/local/tmp/pcscf_probing"
+        return try {
+            // Already exists and executable?
+            val (_, outCheck) = runSuRoot("sh -c 'test -x \"$target\"; echo \$?'")
+            if (outCheck.trim().endsWith("0")) {
+                appendLog("pcscf_probing binary already exists: $target")
+                return true
+            }
+
+            val cpuAbi = Build.SUPPORTED_ABIS[0]
+            val assetName = when {
+                cpuAbi.contains("arm64", ignoreCase = true) ||
+                        cpuAbi.contains("v8a",   ignoreCase = true) ||
+                        cpuAbi.contains("x86_64",ignoreCase = true) -> "pcscf_probing_64"
+                else                                         -> "pcscf_probing_32"
+            }
+            appendLog("Deploying $assetName as pcscf_probing...")
+
+            val localFile = File(filesDir, "pcscf_probing_tmp")
+            assets.open(assetName).use { it.copyTo(localFile.outputStream()) }
+            if (!localFile.exists() || localFile.length() == 0L) return false
+
+            val cmd = "cp \"${localFile.absolutePath}\" \"$target\" && chmod 755 \"$target\""
+            val cpExit = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
+            localFile.delete()
+
+            if (cpExit != 0) {
+                appendLog("pcscf_probing deploy failed (exit=$cpExit)")
+                return false
+            }
+            appendLog("pcscf_probing deployed: $target")
+            true
+        } catch (e: Exception) {
+            appendLog("pcscf_probing deploy error: ${e.message}")
+            false
+        }
+    }
+
+    // ── P-CSCF via su dumpsys connectivity ────────────────────────────────────
+
+    /**
+     * Parse PcscfAddresses from dumpsys connectivity output.
+     * Looks for lines like:
+     *   InterfaceName: rmnet_data2
+     *   PcscfAddresses: [ /2001:1890:1f8:2600::7,/2001:1890:1f8:2700::8 ]
+     * Returns a map of interfaceName -> list of P-CSCF address strings.
+     */
+    private fun parsePcscfFromDumpsys(dumpsys: String): Map<String, List<String>> {
+        val result = mutableMapOf<String, MutableList<String>>()
+        var currentIface: String? = null
+
+        val ifaceRegex = Regex("""InterfaceName:\s*(\S+)""")
+        val pcscfRegex = Regex("""PcscfAddresses:\s*\[([^\]]*)\]""")
+
+        for (line in dumpsys.lines()) {
+            ifaceRegex.find(line)?.let {
+                currentIface = it.groupValues[1]
+            }
+            pcscfRegex.find(line)?.let { match ->
+                val addrs = match.groupValues[1]
+                    .split(",")
+                    .map { it.trim().trimStart('/') }
+                    .filter { it.isNotEmpty() }
+                if (addrs.isNotEmpty()) {
+                    val key = currentIface ?: "unknown"
+                    result.getOrPut(key) { mutableListOf() }.addAll(addrs)
+                }
+            }
+        }
+        return result
+    }
+
+    /**
+     * Read P-CSCF addresses assigned to the device via su dumpsys connectivity.
+     * Returns a flat list of IP strings (may be empty if none found).
+     */
+    private fun getPcscfAddresses(): List<String> {
+        return try {
+            val (exitCode, output) = runSuRoot("dumpsys connectivity")
+
+            if (exitCode != 0 || output.startsWith("[exec error]")) {
+                appendLog("getPcscfAddresses: dumpsys failed (exit=$exitCode)")
+                return emptyList()
+            }
+
+            val pcscfMap = parsePcscfFromDumpsys(output)
+
+            if (pcscfMap.isEmpty()) {
+                appendLog("getPcscfAddresses: no P-CSCF addresses found in dumpsys")
+                return emptyList()
+            }
+
+            val allAddrs = mutableListOf<String>()
+            pcscfMap.forEach { (iface, addrs) ->
+                appendLog("P-CSCF on $iface: ${addrs.joinToString(", ")}")
+                allAddrs.addAll(addrs)
+            }
+
+            allAddrs.distinct()
+        } catch (e: Exception) {
+            appendLog("getPcscfAddresses error: ${e.message}")
+            emptyList()
+        }
+    }
+
+
+    /**
+     * Find the IMS/eIMS network interface and its global source IP.
+     * Priority: eIMS > IMS. Returns interface name + first global unicast address.
+     */
+    private fun getVoiceInterface(): VoiceInterface {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+
+        data class Candidate(val iface: String, val ip: String, val isEims: Boolean)
+        val candidates = mutableListOf<Candidate>()
+
+        for (network in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            val lp   = cm.getLinkProperties(network) ?: continue
+            val iface = lp.interfaceName ?: continue
+
+            val isEims = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_EIMS)
+            val isIms  = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_IMS)
+            if (!isEims && !isIms) continue
+
+            val allAddrs = lp.linkAddresses.map { it.address }.filter { !it.isLoopbackAddress }
+            if (allAddrs.isEmpty()) continue
+
+            // Prefer global unicast (non-link-local, non-site-local) — but accept private IMS IPs too
+            val srcIp = allAddrs.firstOrNull { !it.isLinkLocalAddress && !it.isSiteLocalAddress }?.hostAddress
+                ?: allAddrs.firstOrNull { !it.isLinkLocalAddress }?.hostAddress  // private OK
+                ?: allAddrs.first().hostAddress
+
+            candidates.add(Candidate(iface, srcIp, isEims))
+        }
+
+        val best = candidates.firstOrNull { it.isEims } ?: candidates.firstOrNull()
+        if (best != null) {
+            appendLog("Voice interface: ${best.iface}, src=${best.ip} (eIMS=${best.isEims})")
+            return VoiceInterface(best.iface, best.ip)
+        }
+
+        appendLog("Warning: no IMS/eIMS interface found, falling back to rmnet_data0 with empty src")
+        return VoiceInterface("rmnet_data0", "")
+    }
+
+
+
+
+    /**
+     * Run pcscf_probing.
+     * - 移除 -t 參數（新版 binary 不支援）
+     * - stdout 只把 summary 行傳給 appendLog（即時顯示在 UI）
+     * - 所有輸出由 binary 自己寫進 /data/local/tmp/pcscf_probing_record.txt
+     * - 執行完後把 record 檔複製成 {baseFileName}_probing_record.txt
+     * - shouldStop 可透過 watchdog 中斷 binary
+     *
+     * Exit code 語意（新版 binary）:
+     *   0 = 至少一個 P-CSCF 的兩個 phase 都成功執行
+     *   2 = 所有 P-CSCF 的 probe_one() 都回傳 0（沒有 SYN-ACK）
+     *   1 = 參數錯誤 / binary 找不到 / 其他錯誤
+     */
+    private fun runPcscfProbing(iface: String, srcIp: String, pcscfAddresses: List<String>, baseFileName: String): Int {
+        if (!ensurePcscfProbingBinary()) {
+            appendLog("pcscf_probing binary not available, skipping probing")
+            return 1
+        }
+        if (pcscfAddresses.isEmpty()) {
+            appendLog("No P-CSCF addresses found, skipping probing")
+            return 1
+        }
+
+        val pcscfList = pcscfAddresses.joinToString(",")
+        val srcArg = if (srcIp.isNotEmpty()) "-s $srcIp" else ""
+        // ✅ 修改 1: 移除 -t $count
+        val cmd = "/data/local/tmp/pcscf_probing -i $iface $srcArg -p $pcscfList"
+        appendLog("Running: $cmd")
+
+        fun isSummaryLine(line: String): Boolean {
+            val trimmed = line.trim()
+            return trimmed.startsWith("[INFO]") ||
+                    trimmed.startsWith("=== Probing") ||
+                    trimmed.startsWith("[Phase 1] TCP SYN TTL sweep") ||
+                    trimmed.startsWith("[Phase 2] UDP TTL sweep") ||
+                    trimmed.startsWith("[Phase 2] Burst:") ||
+                    trimmed.startsWith("[Phase 2] Burst complete:") ||
+                    trimmed.startsWith("==========") ||   // ← 取代原本的 ┌─ │ └─
+                    trimmed.startsWith("[DONE]")
+        }
+
+
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+
+            // ✅ 修改 2: Watchdog — shouldStop 時立刻殺掉 binary
+            val watchdog = thread {
+                while (true) {
+                    if (shouldStop) {
+                        process.destroy()
+                        handler.post { appendLog("pcscf_probing killed (user stop)") }
+                        break
+                    }
+                    try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+                    if (!process.isAlive) break
+                }
+            }
+
+            // ✅ 修改 3: stdout — 只把 summary 行傳給 appendLog，其餘靜默
+            val stdoutThread = thread {
+                process.inputStream.bufferedReader().forEachLine { line ->
+                    if (isSummaryLine(line)) {
+                        handler.post { appendLog("[probing] $line") }
+                    }
+                }
+            }
+
+            // stderr 全部傳給 appendLog（通常只有錯誤訊息）
+            val stderrThread = thread {
+                process.errorStream.bufferedReader().forEachLine { line ->
+                    handler.post { appendLog("[probing-err] $line") }
+                }
+            }
+
+            val startMs = System.currentTimeMillis()
+            val exit = process.waitFor()
+            val elapsedMs = System.currentTimeMillis() - startMs
+
+            watchdog.interrupt()
+            stdoutThread.join(5000)
+            stderrThread.join(5000)
+
+            appendLog("pcscf_probing finished in ${elapsedMs}ms, exit=$exit")
+
+            // ✅ 修改 4: 複製 record 檔
+            saveProbingRecord(baseFileName)
+
+            // ✅ 修改 5: 更新後的 exit code 語意
+            exit
+        } catch (e: Exception) {
+            appendLog("pcscf_probing run error: ${e.message}")
+            1
+        }
+    }
+
+    /**
+     * 把 /data/local/tmp/pcscf_probing_record.txt 複製成
+     * {externalFilesDir}/{baseFileName}_probing_record.txt
+     */
+    private fun saveProbingRecord(baseFileName: String) {
+        val src = "/data/local/tmp/pcscf_probing_record.txt"
+        val outDir = getExternalFilesDir(null) ?: run {
+            appendLog("saveProbingRecord: external files dir is null")
+            return
+        }
+        val dst = "${outDir.absolutePath}/${baseFileName}_probing_record.txt"
+
+        thread {
+            try {
+                // 確認 record 檔存在且非空
+                val (_, checkOut) = runSuRoot("sh -c 'test -s \"$src\"; echo \$?'")
+                if (!checkOut.trim().endsWith("0")) {
+                    handler.post { appendLog("saveProbingRecord: record file missing or empty, skip") }
+                    return@thread
+                }
+
+                val cpExit = Runtime.getRuntime().exec(
+                    arrayOf("su", "-c", "cp \"$src\" \"$dst\" && chmod 644 \"$dst\"")
+                ).waitFor()
+
+                handler.post {
+                    if (cpExit == 0)
+                        appendLog("Probing record saved: ${baseFileName}_probing_record.txt")
+                    else
+                        appendLog("saveProbingRecord: cp failed (exit=$cpExit)")
+                }
+            } catch (e: Exception) {
+                handler.post { appendLog("saveProbingRecord error: ${e.message}") }
+            }
+        }
+    }
+
+
+    /**
+     * Scenario 5 call flow:
+     * 1. Run P-CSCF probing (blocking, in background thread)
+     * 2. Dial wifiCallingNumber
+     * 3. Wait up to 60s for call to be answered (reuse WaitForBlockService answer detection,
+     *    or simply wait with a fixed delay then check call state)
+     * 4. After answer, wait 30s then hang up
+     * 5. Capture logs, proceed to next iteration
+     */
+    private fun proceedToProbeAndCall(baseFileName: String, measurementStartTimeStr: String) {
+        if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return }
+
+        appendLog("Scenario 5a: Starting P-CSCF probing...")
+        startNetworkMonitoring()
+
+        thread {
+            val rawAddrs = getPcscfAddresses()
+            val pcscfAddresses = rawAddrs.filter { addr ->
+                try {
+                    val inetAddr = java.net.InetAddress.getByName(addr)
+                    !inetAddr.isLoopbackAddress && !inetAddr.isLinkLocalAddress
+                } catch (e: Exception) { false }
+            }
+            if (pcscfAddresses.isEmpty()) {
+                handler.post { appendLog("Warning: No global P-CSCF addresses found. Probing skipped.") }
+            } else {
+                handler.post { appendLog("Global P-CSCF addresses: ${pcscfAddresses.joinToString(", ")}") }
+            }
+
+            val voiceIface = getVoiceInterface()
+            val probingResult = runPcscfProbing(voiceIface.name, voiceIface.srcIp, pcscfAddresses, baseFileName)
+
+            handler.post {
+                when (probingResult) {
+                    0    -> appendLog("Probing complete: at least one P-CSCF responded ✅")
+                    2    -> appendLog("Probing complete: no P-CSCF responded (may be normal) ⚠️")
+                    else -> appendLog("Probing complete: error during probing ❌")
+                }
+
+                if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@post }
+
+                // ✅ NEW: Wait 30s after probing before dialing
+                appendLog("Waiting ${delayAfterProbing / 1000}s after probing before dialing...")
+                handler.postDelayed({
+                    if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+
+                    appendLog("Scenario 5a: Dialing $wifiCallingNumber...")
+                    Log.d("DataCollector", "=== SCENARIO5A_DIALING: $wifiCallingNumber ===")
+
+                    try {
+                        val cmd = "am start -a android.intent.action.CALL -d tel:$wifiCallingNumber"
+                        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+                        val exit = process.waitFor()
+                        if (exit == 0) {
+                            appendLog("Dial command sent successfully")
+                            Log.d("DataCollector", "=== SCENARIO5A_DIALING: Dialed ===")
+                        } else {
+                            appendLog("Dial failed (exit=$exit), trying fallback...")
+                            fallbackCallWithIntent(wifiCallingNumber)
+                        }
+                    } catch (e: Exception) {
+                        appendLog("Dial error: ${e.message}")
+                        fallbackCallWithIntent(wifiCallingNumber)
+                    }
+
+                    appendLog("Scenario 5a: Waiting for call to be answered...")
+                    Log.d("DataCollector", "=== SCENARIO5A_WAITING_FOR_ANSWER ===")
+
+                    waitForBlockMinWindow(timeoutSec = waitForBlockTimeoutSec) { answered ->
+                        stopNetworkMonitoring()
+
+                        if (answered) {
+                            appendLog("Scenario 5a: Call answered and 30s elapsed. Hanging up...")
+                            Log.d("DataCollector", "=== SCENARIO5A_HANGING_UP_AFTER_30S ===")
+                        } else {
+                            appendLog("Scenario 5a: Timeout — call not answered. Hanging up...")
+                            Log.d("DataCollector", "=== SCENARIO5A_TIMEOUT_HANGUP ===")
+                        }
+
+                        thread { tapScreen(endCallButtonX, endCallButtonY) }
+                        thread {
+                            Thread.sleep(500)
+                            try { Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent KEYCODE_ENDCALL")).waitFor() } catch (_: Exception) {}
+                        }
+
+                        stopPerfettoTraceAndSave(baseFileName)
+
+                        handler.postDelayed({
+                            if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+
+                            stopTcpdump(baseFileName)
+
+                            val captureAndProceed = {
+                                appendLog("Capturing logcat (multiple buffers)...")
+                                saveLogcatMultiBuffer(baseFileName, measurementStartTimeStr)
+                                appendLog("Saved: ${baseFileName}_*.txt")
+
+                                handler.postDelayed({
+                                    if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+                                    if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                        performMeasurement()
+                                    } else {
+                                        appendLog("Scenario 5a Complete!")
+                                        val nextPhase = getNextEnabledPhase(currentPhase)
+                                        if (nextPhase != null) {
+                                            when (nextPhase) {
+                                                1 -> startPhase1(); 2 -> startPhase2(); 3 -> startPhase3()
+                                                4 -> startPhase4(); 5 -> startPhase5(); 6 -> startPhase6()
+                                            }
+                                        } else { finishCollection("All measurements complete!") }
+                                    }
+                                }, delayBetweenCalls)
+                            }
+
+                            if (enableScat) {
+                                appendLog("Stopping SCAT recording...")
+                                sendScatCommand("/stop-scat", null) { scatOk ->
+                                    if (!scatOk) appendLog("Warning: SCAT stop failed")
+                                    captureAndProceed()
+                                }
+                            } else { captureAndProceed() }
+                        }, delayAfterHangup)
+                    }
+                }, delayAfterProbing)  // ← 30s wait after probing
+            }
+        }
+    }
+
+    /**
+    * Scenario 5b: Normal Call first, then P-CSCF probing after call ends.
+    * Flow: Dial → wait 30s call → hang up → probing → save logs
+    */
+    private fun proceedToCallAndProbe(baseFileName: String, measurementStartTimeStr: String) {
+        if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return }
+
+        appendLog("Scenario 5b: Dialing $wifiCallingNumber first...")
+        startNetworkMonitoring()
+
+        Log.d("DataCollector", "=== SCENARIO5B_DIALING: $wifiCallingNumber ===")
+
+        try {
+            val cmd = "am start -a android.intent.action.CALL -d tel:$wifiCallingNumber"
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val exit = process.waitFor()
+            if (exit == 0) {
+                appendLog("Dial command sent successfully")
+                Log.d("DataCollector", "=== SCENARIO5B_DIALING: Dialed ===")
+            } else {
+                appendLog("Dial failed (exit=$exit), trying fallback...")
+                fallbackCallWithIntent(wifiCallingNumber)
+            }
+        } catch (e: Exception) {
+            appendLog("Dial error: ${e.message}")
+            fallbackCallWithIntent(wifiCallingNumber)
+        }
+
+        appendLog("Scenario 5b: Waiting for call to be answered...")
+        Log.d("DataCollector", "=== SCENARIO5B_WAITING_FOR_ANSWER ===")
+
+        waitForBlockMinWindow(timeoutSec = waitForBlockTimeoutSec) { answered ->
+            stopNetworkMonitoring()
+
+            if (answered) {
+                appendLog("Scenario 5b: Call answered and 30s elapsed. Hanging up...")
+                Log.d("DataCollector", "=== SCENARIO5B_HANGING_UP_AFTER_30S ===")
+            } else {
+                appendLog("Scenario 5b: Timeout — call not answered. Hanging up...")
+                Log.d("DataCollector", "=== SCENARIO5B_TIMEOUT_HANGUP ===")
+            }
+
+            thread { tapScreen(endCallButtonX, endCallButtonY) }
+            thread {
+                Thread.sleep(500)
+                try { Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent KEYCODE_ENDCALL")).waitFor() } catch (_: Exception) {}
+            }
+
+            // ✅ Now run probing after call ends
+            handler.postDelayed({
+                if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+
+                appendLog("Scenario 5b: Starting P-CSCF probing after call...")
+
+                thread {
+                    val rawAddrs = getPcscfAddresses()
+                    val pcscfAddresses = rawAddrs.filter { addr ->
+                        try {
+                            val inetAddr = java.net.InetAddress.getByName(addr)
+                            !inetAddr.isLoopbackAddress && !inetAddr.isLinkLocalAddress
+                        } catch (e: Exception) { false }
+                    }
+                    if (pcscfAddresses.isEmpty()) {
+                        handler.post { appendLog("Warning: No global P-CSCF addresses found. Probing skipped.") }
+                    } else {
+                        handler.post { appendLog("Global P-CSCF addresses: ${pcscfAddresses.joinToString(", ")}") }
+                    }
+
+                    val voiceIface = getVoiceInterface()
+                    val probingResult = runPcscfProbing(voiceIface.name, voiceIface.srcIp, pcscfAddresses, baseFileName)
+
+                    handler.post {
+                        when (probingResult) {
+                            0    -> appendLog("Probing complete: at least one P-CSCF responded ✅")
+                            2    -> appendLog("Probing complete: no P-CSCF responded (may be normal) ⚠️")
+                            else -> appendLog("Probing complete: error during probing ❌")
+                        }
+
+                        // ✅ Wait 30s BEFORE stopping tools (keep recording during wait)
+                        appendLog("Waiting ${delayAfterProbing / 1000}s after probing (still recording)...")
+                        handler.postDelayed({
+                            if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+
+                            // NOW stop recording tools
+                            stopPerfettoTraceAndSave(baseFileName)
+                            stopTcpdump(baseFileName)
+
+                            val captureAndProceed = {
+                                appendLog("Capturing logcat (multiple buffers)...")
+                                saveLogcatMultiBuffer(baseFileName, measurementStartTimeStr)
+                                appendLog("Saved: ${baseFileName}_*.txt")
+
+                                handler.postDelayed({
+                                    if (shouldStop || !isCollectionRunning) { finishCollection("Stopped by user"); return@postDelayed }
+                                    if (currentMeasurementCount < totalMeasurementsPerPhase) {
+                                        performMeasurement()
+                                    } else {
+                                        appendLog("Scenario 5b Complete!")
+                                        val nextPhase = getNextEnabledPhase(currentPhase)
+                                        if (nextPhase != null) {
+                                            when (nextPhase) {
+                                                1 -> startPhase1(); 2 -> startPhase2(); 3 -> startPhase3()
+                                                4 -> startPhase4(); 5 -> startPhase5(); 6 -> startPhase6()
+                                            }
+                                        } else { finishCollection("All measurements complete!") }
+                                    }
+                                }, delayBetweenCalls)
+                            }
+
+                            if (enableScat) {
+                                appendLog("Stopping SCAT recording...")
+                                sendScatCommand("/stop-scat", null) { scatOk ->
+                                    if (!scatOk) appendLog("Warning: SCAT stop failed")
+                                    captureAndProceed()
+                                }
+                            } else { captureAndProceed() }
+
+                        }, delayAfterProbing)  // ← 30s wait, tools still running
+                    }
+                }
+            }, delayAfterHangup)
+        }
+    }
+
+
+
 
     private fun performMeasurement() {
         if (shouldStop || !isCollectionRunning) {
@@ -1034,6 +1661,20 @@ class MainActivity : AppCompatActivity() {
                     }
                     4 -> {
                         appendLog("Scenario 4: No network config needed")
+                    }
+                    5 -> {
+                        appendLog("Scenario 5a: Configuring network for experiment #$currentMeasurementCount...")
+                        disableWifi(); Thread.sleep(delayNetworkConfigStep)
+                        enableAirplaneMode(); Thread.sleep(delayNetworkConfigStep)
+                        disableAirplaneMode(); Thread.sleep(delayNetworkConfigStep)
+                        enableSim(); Thread.sleep(delayNetworkConfigStep)
+                    }
+                    6 -> {
+                        appendLog("Scenario 5b: Configuring network for experiment #$currentMeasurementCount...")
+                        disableWifi(); Thread.sleep(delayNetworkConfigStep)
+                        enableAirplaneMode(); Thread.sleep(delayNetworkConfigStep)
+                        disableAirplaneMode(); Thread.sleep(delayNetworkConfigStep)
+                        enableSim(); Thread.sleep(delayNetworkConfigStep)
                     }
                 }
 
@@ -1153,6 +1794,8 @@ class MainActivity : AppCompatActivity() {
                                         2 -> startPhase2()
                                         3 -> startPhase3()
                                         4 -> startPhase4()
+                                        5 -> startPhase5()
+                                        6 -> startPhase6()
                                     }
                                 } else {
                                     finishCollection("All measurements complete!")
@@ -1407,13 +2050,19 @@ class MainActivity : AppCompatActivity() {
             if (shouldStop) { finishCollection("Stopped by user"); return }
 
             if (!enableScat) {
-                // ✅ Start tcpdump even if SCAT is disabled
                 startTcpdumpUntilOk(baseFileName) { tcpdumpOk ->
                     if (!tcpdumpOk) { finishCollection("Stopped"); return@startTcpdumpUntilOk }
-                    if (currentPhase == 4) proceedToSatellite() else proceedToMakeCall()
+                    // ← 修正這行
+                    when (currentPhase) {
+                        4    -> proceedToSatellite()
+                        5    -> proceedToProbeAndCall(baseFileName, measurementStartTimeStr)
+                        6    -> proceedToCallAndProbe(baseFileName, measurementStartTimeStr)
+                        else -> proceedToMakeCall()
+                    }
                 }
                 return
             }
+
 
             appendLog("Starting SCAT recording...")
             sendScatCommand("/start-scat", scatBody) { scatOk ->
@@ -1426,7 +2075,12 @@ class MainActivity : AppCompatActivity() {
 
                         startPerfettoTraceUntilOk(baseFileName) { ok ->
                             if (!ok) { finishCollection("Stopped"); return@startPerfettoTraceUntilOk }
-                            if (currentPhase == 4) proceedToSatellite() else proceedToMakeCall()
+                            when (currentPhase) {
+                                4    -> proceedToSatellite()
+                                5    -> proceedToProbeAndCall(baseFileName, measurementStartTimeStr)
+                                6    -> proceedToCallAndProbe(baseFileName, measurementStartTimeStr)   // ← ADD
+                                else -> proceedToMakeCall()
+                            }
                         }
                     }
                 } else {
@@ -1463,9 +2117,11 @@ class MainActivity : AppCompatActivity() {
             if (shouldStop) { finishCollection("Stopped by user"); return }
 
             appendLog("Starting Frida WiFi calling monitor...")
-            sendFridaCommand("/start-frida-wificalling", null) { fridaOk ->
+            // ✅ Pass scenario so server/frida knows whether to terminate the call (S3) or just notify (S5)
+            val body = """{"scenario": $currentPhase}"""
+            sendFridaCommand("/start-frida-wificalling", body) { fridaOk ->
                 if (fridaOk) {
-                    appendLog("Frida WiFi calling monitor started")
+                    appendLog("Frida WiFi calling monitor started (scenario=$currentPhase)")
                     startScatUntilOkThenProceed()
                 } else {
                     appendLog("Frida WiFi calling start not ready. Retrying in ${retryDelayMs}ms...")
@@ -1475,16 +2131,15 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-
-        // Step 2: Start Frida blocker (must be before SCAT) - now enforced
         // Step 2: Start Frida blocker (must be before SCAT) - now enforced
         // ✅ Scenario 3: skip starting frida script (/start-frida)
-        if (currentPhase == 3) {
-            appendLog("Scenario 3: starting WiFi calling monitor...")
+        if (currentPhase == 3 || currentPhase == 5 || currentPhase == 6) {   // ← add 6
+            appendLog("Scenario ${currentPhase}: starting WiFi calling monitor...")
             startFridaWifiCallingThenStartScat()
         } else {
             startFridaUntilOkThenStartScat()
         }
+
     }
 
     private fun monitorSatelliteConnected(callback: (Boolean) -> Unit) {
@@ -1542,6 +2197,7 @@ class MainActivity : AppCompatActivity() {
         appendLog("Restoring settings...")
         enableSim()
         disableWifiCalling()
+        restoreScreenTimeout()
 
         appendLog("=== $message ===")
 
@@ -1563,6 +2219,8 @@ class MainActivity : AppCompatActivity() {
         checkScenario2.isEnabled = enabled
         checkScenario3.isEnabled = enabled
         checkScenario4.isEnabled = enabled
+        checkScenario5.isEnabled = enabled
+        checkScenario5b.isEnabled = enabled
     }
 
 
@@ -2006,11 +2664,13 @@ class MainActivity : AppCompatActivity() {
     // ===== Utilities =====
     
     private fun appendLog(message: String) {
+        Log.d("DataCollector", message)   // ← 加這一行
         runOnUiThread {
             val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             infoTextView.text = "[$timestamp] $message\n${infoTextView.text}"
         }
     }
+
     
     // ===== Permissions =====
     
@@ -2552,6 +3212,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ===== Screen Lock / ADB Stay-On Control =====
+
+    private fun disableScreenTimeout() {
+        thread {
+            try {
+                Runtime.getRuntime().exec(arrayOf("su", "-c",
+                    "settings put system screen_off_timeout 2147483647")).waitFor()
+                Runtime.getRuntime().exec(arrayOf("su", "-c",
+                    "settings put global stay_on_while_plugged_in 3")).waitFor()
+                handler.post { appendLog("Screen timeout disabled, ADB stay-on enabled") }
+            } catch (e: Exception) {
+                handler.post { appendLog("disableScreenTimeout error: ${e.message}") }
+            }
+        }
+    }
+
+    private fun restoreScreenTimeout() {
+        thread {
+            try {
+                Runtime.getRuntime().exec(arrayOf("su", "-c",
+                    "settings put system screen_off_timeout 30000")).waitFor()
+                Runtime.getRuntime().exec(arrayOf("su", "-c",
+                    "settings put global stay_on_while_plugged_in 0")).waitFor()
+                handler.post { appendLog("Screen timeout restored") }
+            } catch (e: Exception) {
+                handler.post { appendLog("restoreScreenTimeout error: ${e.message}") }
+            }
+        }
+    }
+
+
 
     private fun startIpsecMonitoring(baseFileName: String) {
         // Check if we should monitor IPsec for this scenario
@@ -2656,6 +3347,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    data class VoiceInterface(val name: String, val srcIp: String)
 
 
     // ===== GCS Log Upload =====

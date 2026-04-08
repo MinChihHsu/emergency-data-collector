@@ -55,7 +55,7 @@
 257;01;25701;Europe;Belarus;BY;A1 Belarus;A1;BLRMD;GSM 900 / GSM 1800 / UMTS 900 / UMTS 2100
 702;67;70267;South and Central America;Belize;BZ;Belize Telemedia Limited (BTL);DigiCell;BLZ67;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900 / LTE 700 / LTE 1900
 702;69;70269;South and Central America;Belize;BZ;Speednet Communications Limited;SMART;BLZSC;CDMA2000 850 / UMTS 850 / LTE 700
-901;18;90118;Worldwide;Worldwide;XX;AT&T Mobility;Cellular @Sea;BMU01;GSM 900 / GSM 1900 / CDMA2000 1900 / UMTS 1900
+901;18;90118;Worldwide;Worldwide;XX;AT-T Mobility;Cellular @Sea;BMU01;GSM 900 / GSM 1900 / CDMA2000 1900 / UMTS 1900
 736;01;73601;South and Central America;Bolivia;BO;Nuevatel PCS De Bolivia SA;Viva;BOLNT;GSM 1900 / UMTS 1900 / LTE 1700
 736;03;73603;South and Central America;Bolivia;BO;Telefónica Celular De Bolivia S.A;Tigo;BOLTE;GSM 850 / UMTS 850 / UMTS 1900 / LTE 700
 724;16;72416;South and Central America;Brazil;BR;Brasil Telecom GSM;Brasil Telecom GSM;BRABT;GSM 1800 / UMTS 2100
@@ -433,9 +433,9 @@
 472;01;47201;Asia and the Middle East;Maldives;MV;Dhivehi Raajjeyge Gulhun;Dhiraagu;MDV01;GSM 900 / UMTS 2100 / LTE 1800 / LTE 2600 / 5G 3500
 472;02;47202;Asia and the Middle East;Maldives;MV;Wataniya Telecom Maldives;Ooredoo;MDVWM;GSM 900 / UMTS 2100 / LTE 2600
 334;140;334140;North America and the Caribbean;Mexico;MX;Altán Redes S.A.P.I. de C.V.;Altan Redes;MEXAL;LTE 700
-334;050;334050;North America and the Caribbean;Mexico;MX;AT&T Mexico;AT&T / Unefon;MEXIU;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900 / UMTS 1700 / LTE 850 / LTE 1700
+334;050;334050;North America and the Caribbean;Mexico;MX;AT-T Mexico;AT-T / Unefon;MEXIU;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900 / UMTS 1700 / LTE 850 / LTE 1700
 334;030;334030;North America and the Caribbean;Mexico;MX;Telefónica;Movistar;MEXMS;MVNO
-334;090;334090;North America and the Caribbean;Mexico;MX;AT&T Mexico;AT&T;MEXN3;UMTS 1700 / LTE 850 / LTE 1700
+334;090;334090;North America and the Caribbean;Mexico;MX;AT-T Mexico;AT-T;MEXN3;UMTS 1700 / LTE 850 / LTE 1700
 334;020;334020;North America and the Caribbean;Mexico;MX;América Móvil;Telcel;MEXTL;GSM 1900 / UMTS 850 / UMTS 1900 / LTE 1700 / LTE 2600
 294;03;29403;Europe;North Macedonia;MK;ONE.VIP DOO;vip;MKDNO;GSM 900 / GSM 1800 / UMTS 900 / UMTS 2100 / LTE 800 / LTE 1800
 610;02;61002;Africa;Mali;ML;Orange Mali SA;Orange;MLI02;GSM 900 / UMTS 2100 / LTE
@@ -622,7 +622,7 @@
 748;07;74807;South and Central America;Uruguay;UY;Telefónica Móviles Uruguay;Movistar;URYTM;GSM 850 / GSM 1900 / UMTS 850 / LTE 1900
 310;420;310420;North America and the Caribbean;United States of America;US;Cincinnati Bell Wireless;Cincinnati Bell;USACB;GSM 1900 / UMTS 1700
 311;320;311320;North America and the Caribbean;United States of America;US;Commnet Wireless;Choice Wireless;USACD;GSM 850 / GSM 1900 / CDMA 2000 / UMTS
-310;410;310410;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;USACG;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900
+310;410;310410;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;USACG;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900
 310;450;310450;North America and the Caribbean;United States of America;US;Viaero Wireless;Viaero;USACI;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900
 311;040;311040;North America and the Caribbean;United States of America;US;Commnet Wireless;Choice Wireless;USACO;GSM 850 / GSM 1900 / CDMA 2000 / UMTS
 310;690;310690;North America and the Caribbean;United States of America;US;Limitless Mobile, LLC;Limitless Mobile;USACW;GSM 1900 / LTE 1900
@@ -837,33 +837,33 @@
 208;92;20892;Europe;France;FR;Association Plate-forme Télécom;Com4Innov;;TD-LTE 2300 / LTE 2600
 230;07;23007;Europe;Czech Republic;CZ;ASTELNET, s.r.o.;;;MVNO
 438;03;43803;Asia and the Middle East;Turkmenistan;TM;AŞTU;AGTS CDMA;;CDMA 450
-901;44;90144;Worldwide;Worldwide;XX;AT&T Inc.;;;
-334;010;334010;North America and the Caribbean;Mexico;MX;AT&T Mexico;AT&T;;iDEN 800
-334;040;334040;North America and the Caribbean;Mexico;MX;AT&T Mexico;Unefon;;CDMA2000 800 / CDMA2000 1900
-334;070;334070;North America and the Caribbean;Mexico;MX;AT&T Mexico;Unefon;;
-334;080;334080;North America and the Caribbean;Mexico;MX;AT&T Mexico;Unefon;;
-310;016;310016;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;CDMA2000 1900 / CDMA2000 1700
-310;030;310030;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850
-310;070;310070;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850
-310;080;310080;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 1900
-310;090;310090;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 1900
-310;150;310150;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850 / UMTS 850 / UMTS 1900
-310;170;310170;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 1900
-310;280;310280;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 1900
-310;380;310380;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900
-310;560;310560;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850
-310;670;310670;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;
-310;680;310680;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850 / GSM 1900
-310;950;310950;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850
-311;070;311070;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850
-311;090;311090;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 1900
-311;180;311180;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;GSM 850 / UMTS 850 / UMTS 1900
-311;190;311190;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;
-312;090;312090;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;
-312;670;312670;North America and the Caribbean;United States of America;US;AT&T Mobility;FirstNet;;
-312;680;312680;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;
-313;210;313210;North America and the Caribbean;United States of America;US;AT&T Mobility;AT&T;;
-344;930;344930;North America and the Caribbean;Antigua and Barbuda;AG;AT&T Wireless;;;
+901;44;90144;Worldwide;Worldwide;XX;AT-T Inc.;;;
+334;010;334010;North America and the Caribbean;Mexico;MX;AT-T Mexico;AT-T;;iDEN 800
+334;040;334040;North America and the Caribbean;Mexico;MX;AT-T Mexico;Unefon;;CDMA2000 800 / CDMA2000 1900
+334;070;334070;North America and the Caribbean;Mexico;MX;AT-T Mexico;Unefon;;
+334;080;334080;North America and the Caribbean;Mexico;MX;AT-T Mexico;Unefon;;
+310;016;310016;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;CDMA2000 1900 / CDMA2000 1700
+310;030;310030;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850
+310;070;310070;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850
+310;080;310080;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 1900
+310;090;310090;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 1900
+310;150;310150;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850 / UMTS 850 / UMTS 1900
+310;170;310170;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 1900
+310;280;310280;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 1900
+310;380;310380;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850 / GSM 1900 / UMTS 850 / UMTS 1900
+310;560;310560;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850
+310;670;310670;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;
+310;680;310680;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850 / GSM 1900
+310;950;310950;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850
+311;070;311070;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850
+311;090;311090;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 1900
+311;180;311180;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;GSM 850 / UMTS 850 / UMTS 1900
+311;190;311190;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;
+312;090;312090;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;
+312;670;312670;North America and the Caribbean;United States of America;US;AT-T Mobility;FirstNet;;
+312;680;312680;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;
+313;210;313210;North America and the Caribbean;United States of America;US;AT-T Mobility;AT-T;;
+344;930;344930;North America and the Caribbean;Antigua and Barbuda;AG;AT-T Wireless;;;
 618;02;61802;Africa;Liberia;LR;Atlantic Wireless (Liberia) Inc.;Libercell;;
 614;03;61403;Africa;Niger;NE;Atlantique Telecom (subsidiary of Etisalat);Moov;;GSM 900
 623;01;62301;Africa;Central African Republic;CF;Atlantique Telecom Centrafrique SA;Moov;;GSM 900

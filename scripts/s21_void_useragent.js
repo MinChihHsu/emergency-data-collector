@@ -1,14 +1,9 @@
 Java.perform(function () {
-    // Get Android Log class for logcat output
     var Log = Java.use("android.util.Log");
     var TAG = "frida-ps-call-blocker";
 
-    // Helper function to output debug log to logcat
-    function logInfo(message) {
-        Log.i(TAG, message);
-    }
+    function logInfo(message) { Log.i(TAG, message); }
 
-    // Timestamp helper function
     function getTimestamp() {
         var now = new Date();
         var month = String(now.getMonth() + 1).padStart(2, '0');
@@ -20,78 +15,66 @@ Java.perform(function () {
         return month + "-" + day + " " + hours + ":" + minutes + ":" + seconds + "." + milliseconds;
     }
 
-    function reportReady(id) {
-        console.log("FRIDA_READY:" + id);
-    }
-
+    function reportReady(id) { console.log("FRIDA_READY:" + id); }
     function reportError(id, e) {
         var msg = (e && e.stack) ? e.stack : ("" + e);
         console.log("FRIDA_ERROR:" + id + ":" + msg);
     }
 
+    // ── Fix: set writable cache dir for Java.registerClass() ──────
+    try {
+        var File = Java.use("java.io.File");
+        var cacheDir = File.$new("/data/local/tmp");
+        Java.classFactory.cacheDir = cacheDir;
+        console.log(getTimestamp() + " [INIT] classFactory.cacheDir set to /data/local/tmp");
+        logInfo("classFactory.cacheDir set to /data/local/tmp");
+    } catch (eCacheDir) {
+        console.log(getTimestamp() + " [INIT] Warning: failed to set cacheDir: " + eCacheDir);
+        logInfo("Warning: failed to set cacheDir: " + eCacheDir);
+    }
+
     logInfo("Frida PS Call blocker script started");
 
-    // Start periodic alive message
     var aliveInterval = setInterval(function() {
         logInfo("ps-call-blocker is alive and wait.");
-    }, 1000); // Every 1 second
+    }, 1000);
 
+    // ── Hook: UserAgent.makeCall() ─────────────────────────────────
     try {
-        // Get the UserAgent class
         var UserAgent = Java.use("com.sec.internal.ims.core.handler.secims.UserAgent");
 
-        // Hook the makeCall method with the CORRECT parameter types
         UserAgent.makeCall.overload(
+            'java.lang.String', 'java.lang.String', 'int', 'java.lang.String',
             'java.lang.String',
-            'java.lang.String',
-            'int',
-            'java.lang.String',
-            'java.lang.String',
-            'com.sec.internal.ims.core.handler.secims.imsCommonStruc.AdditionalContents',  // CORRECTED
-            'java.lang.String',
-            'java.lang.String',
-            'java.util.HashMap',
-            'java.lang.String',
-            'boolean',
-            'java.util.List',
-            'int',
-            'android.os.Bundle',
-            'java.lang.String',
-            'int',
-            'java.lang.String',
+            'com.sec.internal.ims.core.handler.secims.imsCommonStruc.AdditionalContents',
+            'java.lang.String', 'java.lang.String', 'java.util.HashMap',
+            'java.lang.String', 'boolean', 'java.util.List', 'int',
+            'android.os.Bundle', 'java.lang.String', 'int', 'java.lang.String',
             'android.os.Message'
-        ).implementation = function (destUri, origUri, type, dispName, dialedNumber, additionalContents,
-            cli, pEmergencyInfo, additionalSipHeaders, alertInfo,
-            isLteEpsOnlyAttached, p2p, cmcBoundSessionId, composerData,
-            replaceCallId, cmcEdCallSlot, isGeolocReqForNormalCall,
-            idcExtra, cmcCallComposerData, message) {
+        ).implementation = function (destUri, origUri, type, dispName, dialedNumber,
+            additionalContents, cli, pEmergencyInfo, additionalSipHeaders,
+            alertInfo, isLteEpsOnlyAttached, p2p, cmcBoundSessionId,
+            composerData, replaceCallId, cmcEdCallSlot,
+            isGeolocReqForNormalCall, idcExtra, cmcCallComposerData, message) {
 
-                // Output to logcat
-                logInfo("Outgoing PS call blocked!");
-                logInfo("Phone Number: " + destUri);
-                
-                var timestamp = getTimestamp();
-                
-                // BLOCKED marker for wait-for-block API detection
-                console.log(timestamp + "[!] ===== BLOCKED: UserAgent.makeCall() =====");
-                console.log(timestamp + "[!] Destination URI: " + destUri);
-                console.log(timestamp + "[!] Origin URI: " + origUri);
-                console.log(timestamp + "[!] Call Type: " + type);
-                console.log(timestamp + "[!] Dialed Number: " + dialedNumber);
-                console.log(timestamp + "[!] Emergency Info: " + pEmergencyInfo);
-                console.log(timestamp + "[!] CLI: " + cli);
-                console.log(timestamp + "[!] Display Name: " + dispName);
-                console.log(timestamp + "[!] Is LTE EPS Only: " + isLteEpsOnlyAttached);
-                console.log("[+] Call blocked - voided");
+            logInfo("Outgoing PS call blocked!");
+            logInfo("Phone Number: " + destUri);
 
-                // Do nothing - void the function
-                // The original method is not called, so no call will be made
-                return;
-            };
+            var timestamp = getTimestamp();
+            console.log(timestamp + " [!] ===== BLOCKED: UserAgent.makeCall() =====");
+            console.log(timestamp + " [!] Destination URI: " + destUri);
+            console.log(timestamp + " [!] Origin URI: " + origUri);
+            console.log(timestamp + " [!] Call Type: " + type);
+            console.log(timestamp + " [!] Dialed Number: " + dialedNumber);
+            console.log(timestamp + " [!] Emergency Info: " + pEmergencyInfo);
+            console.log(timestamp + " [!] Is LTE EPS Only: " + isLteEpsOnlyAttached);
+            console.log("[+] Call blocked - voided");
+
+            return;
+        };
 
         logInfo("Successfully hooked UserAgent.makeCall() - ready to block PS calls");
         console.log("[+] Successfully hooked UserAgent.makeCall()");
-        console.log("[+] Calls will be blocked at UserAgent level");
         reportReady("s21_void_useragent");
 
     } catch (e) {
@@ -100,9 +83,10 @@ Java.perform(function () {
         console.log("[-] Error details: " + e.stack);
         reportError("s21_void_useragent", e);
 
-        // Clear the alive interval if hook failed
         if (aliveInterval) {
             clearInterval(aliveInterval);
         }
     }
+
 });
+
