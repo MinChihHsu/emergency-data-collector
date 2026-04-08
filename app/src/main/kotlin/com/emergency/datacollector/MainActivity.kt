@@ -1191,17 +1191,28 @@ class MainActivity : AppCompatActivity() {
             val allAddrs = lp.linkAddresses.map { it.address }.filter { !it.isLoopbackAddress }
             if (allAddrs.isEmpty()) continue
 
-            // Prefer global unicast (non-link-local, non-site-local) — but accept private IMS IPs too
-            val srcIp = allAddrs.firstOrNull { !it.isLinkLocalAddress && !it.isSiteLocalAddress }?.hostAddress
-                ?: allAddrs.firstOrNull { !it.isLinkLocalAddress }?.hostAddress  // private OK
-                ?: allAddrs.first().hostAddress
+            // Log all addresses for debugging
+            allAddrs.forEach { appendLog("  IMS addr on $iface: ${it.hostAddress}") }
+
+            // Prefer IPv6 (pcscf_probing supports both, but IPv6 is preferred for IMS)
+            // Priority: IPv6 global > IPv6 private > IPv4 global > IPv4 private
+            val ipv6Addrs = allAddrs.filterIsInstance<java.net.Inet6Address>()
+            val ipv4Addrs = allAddrs.filterIsInstance<java.net.Inet4Address>()
+
+            val srcIp =
+                ipv6Addrs.firstOrNull { !it.isLinkLocalAddress && !it.isSiteLocalAddress }?.hostAddress
+                    ?: ipv6Addrs.firstOrNull { !it.isLinkLocalAddress }?.hostAddress
+                    ?: ipv4Addrs.firstOrNull { !it.isLinkLocalAddress && !it.isSiteLocalAddress }?.hostAddress
+                    ?: ipv4Addrs.firstOrNull { !it.isLinkLocalAddress }?.hostAddress
+                    ?: allAddrs.first().hostAddress
 
             candidates.add(Candidate(iface, srcIp, isEims))
         }
 
         val best = candidates.firstOrNull { it.isEims } ?: candidates.firstOrNull()
         if (best != null) {
-            appendLog("Voice interface: ${best.iface}, src=${best.ip} (eIMS=${best.isEims})")
+            val proto = if (best.ip.contains(":")) "IPv6" else "IPv4"
+            appendLog("Voice interface: ${best.iface}, src=${best.ip} ($proto, eIMS=${best.isEims})")
             return VoiceInterface(best.iface, best.ip)
         }
 
@@ -1236,8 +1247,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val pcscfList = pcscfAddresses.joinToString(",")
-        val srcArg = if (srcIp.isNotEmpty()) "-s $srcIp" else ""
-        // ✅ 修改 1: 移除 -t $count
+        // Strip interface suffix from IPv6 link-local (e.g. "fe80::1%rmnet2" → "fe80::1")
+        // IPv4 addresses are unaffected by substringBefore("%")
+        val cleanSrcIp = srcIp.substringBefore("%")
+        val srcArg = if (cleanSrcIp.isNotEmpty()) "-s $cleanSrcIp" else ""
         val cmd = "/data/local/tmp/pcscf_probing -i $iface $srcArg -p $pcscfList"
         appendLog("Running: $cmd")
 
